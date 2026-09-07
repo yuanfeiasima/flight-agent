@@ -73,7 +73,6 @@ class SiteResult:
     flights: list[Flight] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     html_path: Optional[str] = None
-    screenshot_path: Optional[str] = None
     fetched_at: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds")
     )
@@ -90,7 +89,6 @@ class SiteResult:
             "flights": [f.to_dict() for f in self.flights],
             "warnings": self.warnings,
             "html_path": self.html_path,
-            "screenshot_path": self.screenshot_path,
             "fetched_at": self.fetched_at,
         }
 

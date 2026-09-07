@@ -8,20 +8,32 @@
 
 ```
 flight-agent/
-├── scripts/open_chrome_debug.sh   # 用独立资料目录启动带调试端口的 Chrome(登录态保存在 .chrome-profile/)
+├── scripts/
+│   ├── open_chrome_debug.sh   # 用独立资料目录启动带调试端口的 Chrome(登录态保存在 .chrome-profile/)
+│   └── test.sh                # 一键离线自检(引擎 + 携程解析回归,uv 缓存指向工程内 .uv-cache/)
 ├── flight_agent/
-│   ├── browser.py                 # 浏览器会话层:CDP 附加你已登录的 Chrome
-│   ├── models.py                  # 航班/查询/结果 数据模型
-│   ├── config.py                  # 运行配置(约束默认值都在这里)
-│   ├── city_codes.py              # 城市 → 携程 IATA 城市码映射
+│   ├── browser.py             # 浏览器会话层:CDP 附加你已登录的 Chrome
+│   ├── models.py              # 航班/查询/结果 数据模型
+│   ├── config.py              # 运行配置(约束默认值、滚动/等待参数都在这里)
+│   ├── city_codes.py          # 城市 → 携程 IATA 城市码映射
 │   ├── adapters/
-│   │   ├── base.py                # 站点适配器抽象接口 + 公共解析工具
-│   │   └── ctrip.py               # 携程适配器:搜索 → 等待 → 抽取航班列表
+│   │   ├── base.py            # 站点适配器抽象接口 + 公共解析工具
+│   │   └── ctrip.py           # 携程适配器:搜索 → 等待 → 滚动懒加载 → 抽取航班列表
 │   ├── engine/
-│   │   └── compare.py             # 比价决策引擎:归一化/约束过滤/去重/排序(纯逻辑,可单测)
-│   └── cli.py                     # 命令行入口
-└── tests/test_compare.py          # 比价引擎单元测试(无需浏览器/网络)
+│   │   └── compare.py         # 比价决策引擎:归一化/约束过滤/去重/排序(纯逻辑,可单测)
+│   └── cli.py                 # 命令行入口
+├── tools/
+│   ├── probe.py               # 调试探针:抓真实页面 HTML 看 DOM 结构(只存 HTML,不截图)
+│   └── make_fixture.py        # 从真实页面提取航班列表子树 → 离线测试 fixture
+├── tests/
+│   ├── test_compare.py        # 比价引擎单元测试(无需浏览器/网络)
+│   ├── test_ctrip_parse.py    # 携程卡片纯文本解析 + fixture 结构回归
+│   └── fixtures/ctrip_flight_list_fragment.html   # 真实页面子树(改版后重新生成)
+└── artifacts/                 # 运行产物(不入库):latest_query.json、失败现场 HTML
 ```
+
+> 设计约定:**解析与调试只依赖 DOM/HTML 文本,不解析任何图片/截图**。
+> 抓取失败只转储 HTML(便于修选择器);探针工具也不再生成 PNG。
 
 ## 架构五层(对齐书里 agent 设计的落地)
 
@@ -50,8 +62,8 @@ bash scripts/open_chrome_debug.sh
 #   在打开的 Chrome 里访问 https://flights.ctrip.com ,登录你的账号(登录态会保存在 .chrome-profile/)
 #   确认能正常看到机票搜索页后,保持该 Chrome 开着
 
-# 3) 离线自检(比价引擎单测,不需要浏览器)
-uv run pytest tests/ -q
+# 3) 离线自检(比价引擎 + 携程解析回归,不需要浏览器)
+bash scripts/test.sh
 
 # 4) 跑一次真实比价查询
 uv run python -m flight_agent.cli \
@@ -61,9 +73,12 @@ uv run python -m flight_agent.cli \
 # 常见参数
 #   --dep-after 08:00 --arr-before 22:00   出发/到达时刻窗(默认全天)
 #   --max-stops 1                           允许 1 次中转
-#   --dump                                    抓取失败时把 HTML/截图存到 artifacts/ 便于修选择器
+#   --dump                                    抓取失败时把 HTML 存到 artifacts/ 便于修选择器
 #   --self-test                               不连浏览器,跑一次引擎示例
 ```
+
+> uv 缓存:本机 `~/.cache` 可能无写权限,`scripts/test.sh` 会把 uv 缓存指到工程内
+> `.uv-cache/`;直接敲 `uv run` 前也建议 `export UV_CACHE_DIR="$PWD/.uv-cache"`。
 
 输出:终端打印**符合约束的航班按价格升序**的表格 + 最低价推荐;同时把结构化结果写入 `artifacts/latest_query.json`。
 
@@ -76,8 +91,13 @@ uv run python -m flight_agent.cli \
 
 ## 已知限制与路线图
 
-- [ ] 携程页面结构变动会导致抽取失败 —— 失败时自动转储 HTML/截图,改 `adapters/ctrip.py` 里的选择器即可,其它层不受影响
+- [x] 卡片定位限定真实列表容器(`.flight-list .flight-item`),不再误抓头部下拉等同类名节点
+- [x] 首屏常见“空占位卡片”:自动跳过,并内置**滚动懒加载**多轮拉取(需真实 Chrome 联调确认拉满)
+- [x] 卡片解析拆成纯文本函数 `flight_from_card_text()`,可用离线 fixture 回归 —— 改选择器不用每次开浏览器
+- [x] 不再生成/依赖任何截图,失败只转储 HTML
+- [ ] 携程页面结构变动仍会导致抽取失败 —— 流程:改 `adapters/ctrip.py` 选择器 → `tools/probe.py` 抓新页 → `tools/make_fixture.py` 刷新 fixture;其它层不受影响
 - [ ] 一些低价可能被网站折叠(“更多低价”),首版只抓列表主区
+- [ ] 滚动懒加载的收尾验证(真实 Chrome 联调一轮,确认列表能拉满)
 - [ ] 多渠道:加一个继承 `SiteAdapter` 的类即可(去哪儿/航司官网…)
 - [ ] 持续监控:同一查询按天/小时跑,积累价格历史(二期)
 - [ ] 登录墙/滑块等风控:真实登录 + 低频人工节奏缓解;不承诺绕过任何验证码

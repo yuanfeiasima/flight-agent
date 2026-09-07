@@ -1,11 +1,14 @@
 """携程机票适配器(桌面版 www/flights.ctrip.com)。
 
-抽取策略(结构变化时只改本文件):
-1. 用候选容器选择器收集“航班卡片”,拿不到则等待到超时;
-2. 逐卡解析:航班号/时刻用正则,价格优先走价格节点选择器,
-   拿不到时取卡内最小的合理金额兜底;
-3. 解析失败的卡计入 warnings/无价统计,不中断整体抓取;
-4. 抓取失败(dump_on_failure)时把整页 HTML 与截图存到 artifacts/,便于修正选择器。
+抽取策略(结构变化时只改本文件,重点维护“选择器配置区”):
+1. 卡片定位优先限定在真实列表容器 `.flight-list` 内(避免误抓头部下拉/推荐位
+   里同名的 `.flight-item` 节点),列表容器找不到时退回旧泛化选择器;
+2. 卡片内容解析是**纯文本函数** `flight_from_card_text()`(不依赖浏览器/DOM,
+   可离线单测);适配器只负责“拿到卡片的 inner_text + 价格节点提示”再喂给它;
+3. 携程列表是滚动懒加载:首屏常只渲染少量真实卡片 + 大量**空占位节点**,
+   因此在列表出现后先做滚动加载循环,再统计/解析;
+4. 单卡失败不拖垮整体;整体失败(dump_on_failure)只转储 HTML(不做截图,
+   解析从不依赖图片),便于修正选择器。
 
 注意:低价区间可能被网站折叠(“更多低价”),首版只抓列表主区,README 已注明。
 """
@@ -25,14 +28,26 @@ from flight_agent.models import Flight, SearchQuery, SiteResult
 
 log = logging.getLogger("flight-agent.ctrip")
 
+# ========================================================================== #
 # —— 携程改版时重点维护的“选择器配置区” ——
-CARD_SELECTORS = [
+# 首选:限定在真实航班列表容器内(排除头部下拉 / 推荐位等同类名节点)。
+#   当前真实结构:div.flight-list.root-flights > div.flight-item.domestic
+CARD_SCOPED_SELECTORS = [
+    "div.flight-list div.flight-item",
+    "div[class*='flightList'] div[class*='flightItem']",
+]
+# 兜底:容器结构大改导致首选找不到时,退回旧泛化写法(会多抓,但至少不丢)
+CARD_FALLBACK_SELECTORS = [
     "div.flight-item",
     "div[class*='flightItem']",
     "div[class*='flight-card']",
     "div[class*='FlightCard']",
 ]
+# 价格节点(按优先级排;取到首个能解析出金额的即可)
 PRICE_SELECTORS = [
+    "div[class*='domestic-flight-price']",
+    "div[class*='flight-price']",
+    "div[class*='price-box'] div[class*='price']",
     "div[class*='price']",
     "span[class*='price']",
     "b[class*='price']",
@@ -57,10 +72,18 @@ _AIRLINE_PREFIX = {  # 航班号前缀 → 航司名(兜底;卡内文本通常�
 }
 
 _CABIN_RE = re.compile(r"(经济舱|公务舱|头等舱|超级经济舱)")
+_PRICE_AMOUNT_RE = re.compile(r"¥\s*([0-9][0-9,]*)")
+
+_SCROLL_LIST_JS = """(els) => {
+  const list = document.querySelector('.flight-list');
+  if (list) list.scrollTo(0, list.scrollHeight);
+  window.scrollBy(0, 800);
+}"""
 
 
-def _card_css() -> str:
-    return ", ".join(CARD_SELECTORS)
+def _card_css(use_fallback: bool = False) -> str:
+    sels = CARD_FALLBACK_SELECTORS if use_fallback else CARD_SCOPED_SELECTORS
+    return ", ".join(sels)
 
 
 def _price_css() -> str:
@@ -70,6 +93,9 @@ def _price_css() -> str:
 def _close_css() -> str:
     return ", ".join(CLOSE_SELECTORS)
 
+
+# ========================================================================== #
+# —— 纯文本解析(无浏览器依赖,可离线单测) ——
 
 def _clean_lines(text: str) -> list[str]:
     return [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
@@ -120,24 +146,68 @@ def _parse_stops(text: str) -> tuple[int, str]:
     return 0, "直飞(推测)"
 
 
-def _pick_price(card, card_text: str) -> Optional[float]:
-    """价格解析:优先价格节点,失败则取卡内最小合理金额兜底。"""
-    try:
-        node = card.locator(_price_css()).first
-        if node.count() > 0:
-            t = node.inner_text()
-            p = clean_price(t)
-            if p is not None:
-                return p
-    except Exception:  # noqa: BLE001 定位器异常不致命
-        pass
+def _price_from_text(text: str) -> Optional[float]:
+    """从卡片文本取最小合理金额(¥30 ~ ¥100000),排除零散标注。"""
     amounts = [
         float(x.replace(",", ""))
-        for x in re.findall(r"¥\s*([0-9][0-9,]*)", card_text)
+        for x in re.findall(r"¥\s*([0-9][0-9,]*)", text or "")
     ]
-    amounts = [a for a in amounts if 30 <= a <= 100000]  # 排除零散标注
+    amounts = [a for a in amounts if 30 <= a <= 100000]
     return min(amounts) if amounts else None
 
+
+def flight_from_card_text(
+    text: str,
+    q: SearchQuery,
+    site: str = "ctrip",
+    price_hint: Optional[float] = None,
+) -> Optional[Flight]:
+    """从一张航班卡片的 inner_text 解析出 Flight(纯函数)。
+
+    返回 None 表示这不是一张可用的航班卡(空占位 / 无航班号 / 纯广告),
+    调用方应静默跳过、不当作解析失败刷屏。
+    price_hint: 适配器优先从“价格节点”取到的金额;为 None 时退化为文本兜底。
+    """
+    if not text or not text.strip():
+        return None
+    flight_no = guess_flight_no(text)
+    if not flight_no:
+        return None
+    lines = _clean_lines(text)
+
+    # 携程卡片内时刻分行排列:按出现顺序取前两个 HH:MM 为出发/到达
+    hhmm = _HHMM_RE.findall(text)
+    dep_time = hhmm[0] if hhmm else ""
+    arr_time = hhmm[1] if len(hhmm) > 1 else ""
+
+    stops, stop_info = _parse_stops(text)
+    cabin_m = _CABIN_RE.search(text)
+    cabin = cabin_m.group(1) if cabin_m else "经济舱(默认)"
+    price = price_hint if price_hint is not None else _price_from_text(text)
+    airline = _airline_from_lines(lines, flight_no) or _AIRLINE_PREFIX.get(
+        flight_no[:2], flight_no[:2]
+    )
+    dep_ap, arr_ap = _airports_from_lines(lines, dep_time, arr_time)
+
+    return Flight(
+        airline=airline,
+        flight_no=flight_no,
+        dep_airport=dep_ap or q.dep_city,
+        arr_airport=arr_ap or q.arr_city,
+        dep_time=dep_time,
+        arr_time=arr_time,
+        arr_day_offset=1 if ("+1天" in text or "次日" in text) else 0,
+        stops=stops,
+        stop_info=stop_info,
+        cabin=cabin,
+        price=price,
+        site=site,
+        raw=text[:300],
+    )
+
+
+# ========================================================================== #
+# —— 页面机制(Playwright / DOM) ——
 
 class CtripAdapter(SiteAdapter):
     site = "ctrip"
@@ -168,22 +238,39 @@ class CtripAdapter(SiteAdapter):
 
             # 列表出现后再静置,等价格等字段渲染完成
             page.wait_for_timeout(settings.settle_ms)
-            cards = page.locator(_card_css()).all()
+            # 携程列表滚动懒加载:多滚几轮,把未渲染的真实卡片“拉”出来
+            if settings.scroll_rounds > 0:
+                self._scroll_list_to_load(page, settings)
+            cards = self._locate_cards(page).all()
 
-            parsed = skipped = 0
+            parsed = skipped = placeholder = 0
             for card in cards:
                 try:
-                    if self._parse_card(card, q, result):
+                    text = card.inner_text(timeout=2000)
+                except Exception:  # noqa: BLE001 单卡读取失败按跳过处理
+                    text = ""
+                if not text.strip():
+                    placeholder += 1  # 空占位节点(列表骨架/尚未渲染)
+                    continue
+                try:
+                    if self._parse_card_text(text, card, q, result):
                         parsed += 1
                     else:
                         skipped += 1
                 except Exception as exc:  # noqa: BLE001 单卡失败不拖垮整体
                     log.debug("解析单卡失败: %s", exc)
                     skipped += 1
+            if placeholder:
+                result.warnings.append(
+                    f"列表含 {placeholder} 个空占位节点(航班未渲染/骨架)"
+                )
             if skipped:
                 result.warnings.append(f"跳过 {skipped} 个非航班/异常卡片")
             if parsed == 0:
-                self._record_failure(page, q, settings, result, reason="卡片存在但全部解析失败")
+                reason = "卡片存在但全部为空占位(列表未渲染/需滚动)"
+                if skipped:
+                    reason = "卡片存在但全部解析失败"
+                self._record_failure(page, q, settings, result, reason=reason)
             elif result.ok_count == 0:
                 result.warnings.append("解析出卡片但均未拿到价格(可能改版/需登录/售罄)")
 
@@ -228,11 +315,22 @@ class CtripAdapter(SiteAdapter):
             break
 
     # ------------------------------------------------------------------ #
+    def _locate_cards(self, page: Page):
+        """首选限定容器的卡片选择器;找不到再退回泛化写法。"""
+        scoped = page.locator(_card_css(use_fallback=False))
+        try:
+            if scoped.count() > 0:
+                return scoped
+        except Exception:  # noqa: BLE001
+            pass
+        return page.locator(_card_css(use_fallback=True))
+
+    # ------------------------------------------------------------------ #
     def _wait_cards(self, page: Page, settings) -> List:
         deadline = time.time() + settings.page_timeout_ms / 1000.0
         while time.time() < deadline:
             try:
-                loc = page.locator(_card_css())
+                loc = self._locate_cards(page)
                 n = loc.count()
             except Exception:  # noqa: BLE001
                 n = 0
@@ -242,45 +340,54 @@ class CtripAdapter(SiteAdapter):
         return []
 
     # ------------------------------------------------------------------ #
-    def _parse_card(self, card, q: SearchQuery, result: SiteResult) -> bool:
-        """解析一张卡片。成功(识别出航班号)返回 True;否则 False(静默跳过,不刷屏警告)。"""
-        text = card.inner_text()
-        flight_no = guess_flight_no(text)
-        if not flight_no:
+    def _scroll_list_to_load(self, page: Page, settings) -> None:
+        """滚动懒加载:把列表滚到底,直到卡片数稳定或轮次用尽(尽力而为)。"""
+        loc = page.locator(_card_css(use_fallback=False))
+        prev = -1
+        for _ in range(settings.scroll_rounds):
+            try:
+                if loc.count():
+                    loc.first.evaluate(_SCROLL_LIST_JS)
+            except Exception:  # noqa: BLE001
+                pass
+            page.wait_for_timeout(settings.scroll_settle_ms)
+            try:
+                n = loc.count()
+            except Exception:  # noqa: BLE001
+                n = 0
+            if n == prev:
+                break
+            prev = n
+
+    # ------------------------------------------------------------------ #
+    def _pick_price(self, card, card_text: str) -> Optional[float]:
+        """价格解析:优先价格节点,失败则取卡内最小合理金额兜底。"""
+        try:
+            node = card.locator(_price_css()).first
+            if node.count() > 0:
+                t = node.inner_text()
+                p = clean_price(t)
+                if p is not None:
+                    return p
+        except Exception:  # noqa: BLE001 定位器异常不致命
+            pass
+        return _price_from_text(card_text)
+
+    # ------------------------------------------------------------------ #
+    def _parse_card_text(self, text: str, card, q: SearchQuery, result: SiteResult) -> bool:
+        """解析一张有内容的卡片:价格节点优先,文本解析为辅。
+
+        返回 True 表示成功产出 Flight;False 表示非航班内容(静默跳过)。
+        """
+        price_hint = None
+        try:
+            price_hint = self._pick_price(card, text)
+        except Exception:  # noqa: BLE001
+            pass
+        flight = flight_from_card_text(text, q, site=self.site, price_hint=price_hint)
+        if flight is None:
             return False
-        lines = _clean_lines(text)
-
-        # 携程卡片内时刻分行排列:按出现顺序取前两个 HH:MM 为出发/到达
-        hhmm = _HHMM_RE.findall(text)
-        dep_time = hhmm[0] if hhmm else ""
-        arr_time = hhmm[1] if len(hhmm) > 1 else ""
-
-        stops, stop_info = _parse_stops(text)
-        cabin_m = _CABIN_RE.search(text)
-        cabin = cabin_m.group(1) if cabin_m else "经济舱(默认)"
-        price = _pick_price(card, text)
-        airline = _airline_from_lines(lines, flight_no) or _AIRLINE_PREFIX.get(
-            flight_no[:2], flight_no[:2]
-        )
-        dep_ap, arr_ap = _airports_from_lines(lines, dep_time, arr_time)
-
-        result.flights.append(
-            Flight(
-                airline=airline,
-                flight_no=flight_no,
-                dep_airport=dep_ap or q.dep_city,
-                arr_airport=arr_ap or q.arr_city,
-                dep_time=dep_time,
-                arr_time=arr_time,
-                arr_day_offset=1 if ("+1天" in text or "次日" in text) else 0,
-                stops=stops,
-                stop_info=stop_info,
-                cabin=cabin,
-                price=price,
-                site=self.site,
-                raw=text[:300],
-            )
-        )
+        result.flights.append(flight)
         return True
 
     # ------------------------------------------------------------------ #
@@ -293,7 +400,10 @@ class CtripAdapter(SiteAdapter):
 
     # ------------------------------------------------------------------ #
     def _dump(self, page, q, settings, result) -> None:
-        """把现场(HTML+截图)存下来,便于人工/LLM 修正选择器。"""
+        """把现场 HTML 存下来,便于人工/LLM 修正选择器。
+
+        设计上不做截图:解析与调试只依赖 DOM/HTML 文本(截图不提供解析所需信息)。
+        """
         try:
             out = Path(settings.artifacts_dir)
             out.mkdir(parents=True, exist_ok=True)
@@ -302,9 +412,6 @@ class CtripAdapter(SiteAdapter):
             html_path = out / f"{stem}.html"
             html_path.write_text(page.content(), encoding="utf-8")
             result.html_path = str(html_path)
-            shot = out / f"{stem}.png"
-            page.screenshot(path=str(shot), full_page=False)
-            result.screenshot_path = str(shot)
-            log.info("现场已转储: %s / %s", html_path, shot)
+            log.info("现场 HTML 已转储: %s", html_path)
         except Exception as exc:  # noqa: BLE001
             log.warning("转储失败: %s", exc)

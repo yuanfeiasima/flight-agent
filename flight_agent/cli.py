@@ -42,7 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--top", type=int, default=10, help="终端展示前 N 条")
     p.add_argument("--cdp-port", type=int, default=9222, help="Chrome 调试端口")
     p.add_argument("--out", default="artifacts/latest_query.json", help="结构化结果输出路径")
-    p.add_argument("--no-dump", action="store_true", help="抓取失败时不转储 HTML/截图")
+    p.add_argument("--no-dump", action="store_true", help="抓取失败时不转储 HTML")
     p.add_argument("--self-test", action="store_true", help="不连浏览器,离线跑一遍引擎示例")
     return p
 
