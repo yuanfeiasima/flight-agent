@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-import re
 from datetime import date
 from pathlib import Path
 
@@ -106,14 +105,18 @@ def test_price_from_text_filters_small_labels():
 
 
 # --------------------------------------------------------------------------- #
-# 离线 fixture 结构回归(由 tools/make_fixture.py 生成)
+# 离线 fixture 结构回归(由 tools/make_fixture.py 从真实页面子树生成)
 def test_fixture_matches_observed_ctrip_dom():
     sub = FIXTURE.read_text(encoding="utf-8")
     assert 'class="flight-list root-flights"' in sub
-    assert sub.count('class="flight-item domestic"') == 7
-    # 捕获时刻:仅 2 张真实渲染(带航班号),其余为待懒加载的空槽位
-    real = re.findall(
-        r"\b(?:CA|MU|CZ|HU|3U|MF|ZH|SC|KN|9C|HO|GS|GJ|QW|DZ)\d{3,4}\b", sub
-    )
-    assert real == ["CA8341", "MU5231"]
-    assert "flight-segment-type-group" in sub
+    # 滚动后的真实快照:13 个 flight-item 槽位,其中 10 个渲染了 .plane-No
+    assert sub.count('class="flight-item domestic"') == 13
+    assert sub.count('<span class="plane-No">') == 10
+    # 样例航班号(plane-No 节点内以 ">CA8341&nbsp;" 形式出现,id 兜底形如 comfort-…)
+    for no in ("CZ8888", "MU5231", "MU5138", "SC4642"):
+        assert f">{no}&nbsp;" in sub or f'id="comfort-{no}' in sub
+    # 覆盖关键结构:跨天(+1天)、中转组合、航司 logo 与价格节点
+    assert "+1天" in sub
+    assert "中转" in sub
+    assert "airline-logo" in sub
+    assert "flight-price" in sub

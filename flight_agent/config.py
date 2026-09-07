@@ -13,9 +13,9 @@ class Settings:
 
     # —— 页面等待 ——
     page_timeout_ms: int = 30_000   # 等待航班列表出现的总超时
-    settle_ms: int = 2_500          # 列表出现后再静置一段时间等价格渲染
-    scroll_rounds: int = 5          # 滚动懒加载轮数(0 = 关闭滚动)
-    scroll_settle_ms: int = 1_200   # 每轮滚动后的静置时间
+    settle_ms: int = 4_000          # 列表出现后再静置一段时间等价格渲染
+    scroll_rounds: int = 6          # 滚动懒加载轮数(0 = 关闭滚动)
+    scroll_settle_ms: int = 1_500   # 每轮滚动后的静置时间
 
     # —— 输出 ——
     top_n: int = 10                 # 终端展示前 N 条

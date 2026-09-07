@@ -2,15 +2,18 @@
 
 抽取策略(结构变化时只改本文件,重点维护“选择器配置区”):
 1. 卡片定位优先限定在真实列表容器 `.flight-list` 内(避免误抓头部下拉/推荐位
-   里同名的 `.flight-item` 节点),列表容器找不到时退回旧泛化选择器;
-2. 卡片内容解析是**纯文本函数** `flight_from_card_text()`(不依赖浏览器/DOM,
-   可离线单测);适配器只负责“拿到卡片的 inner_text + 价格节点提示”再喂给它;
-3. 携程列表是滚动懒加载:首屏常只渲染少量真实卡片 + 大量**空占位节点**,
-   因此在列表出现后先做滚动加载循环,再统计/解析;
-4. 单卡失败不拖垮整体;整体失败(dump_on_failure)只转储 HTML(不做截图,
-   解析从不依赖图片),便于修正选择器。
-
-注意:低价区间可能被网站折叠(“更多低价”),首版只抓列表主区,README 已注明。
+   里同名的 `.flight-item` 节点),容器找不到时退回旧泛化选择器;
+2. 携程列表页**渐进渲染 + 滚动懒加载**:首屏常只有 2~3 张带航班号、其余为空占位
+   (~12s 才出列表),滚动后才会补全到 10+ 张。因此:等待出现 → 静置 → 多轮滚动,
+   直到卡片槽位数稳定;
+3. 字段解析**优先读 DOM 节点**(航班号 `.plane-No`,航空公司 `.airline-logo[alt]`,
+   时刻/机场 `.depart-box|.arrive-box` 下的 `.time|.airport|.day`,价格
+   `.flight-price/.domestic-flight-price`)。注意 inner_text 会漏掉部分卡片(例如
+   部分卡不渲染航班号节点),因此航班号还有一层 **元素 id 兜底**(`airlineNameCA8341_…`)。
+   节点都拿不到时才退回纯文本解析 `flight_from_card_text()`(该纯函数无浏览器依赖,
+   可离线单测);
+4. 单卡失败不拖垮整体;整体失败(dump_on_failure)只转储 HTML(不做截图 ——
+   解析与调试从不依赖图片)。
 """
 
 from __future__ import annotations
@@ -43,10 +46,17 @@ CARD_FALLBACK_SELECTORS = [
     "div[class*='flight-card']",
     "div[class*='FlightCard']",
 ]
-# 价格节点(按优先级排;取到首个能解析出金额的即可)
+# 卡片内字段节点(按优先级排,取第一个非空)
+NO_SELECTORS = [".plane-No", "span[class*='plane-No']"]
+AIRLINE_NAME_SELECTORS = [".airline-name", "span[class*='airline-name']"]
+DEP_TIME_SELECTORS = [".depart-box .time", "div[class*='depart-box'] div[class*='time']"]
+ARR_TIME_SELECTORS = [".arrive-box .time", "div[class*='arrive-box'] div[class*='time']"]
+DEP_AIRPORT_SELECTORS = [".depart-box .airport", "div[class*='depart-box'] div[class*='airport']"]
+ARR_AIRPORT_SELECTORS = [".arrive-box .airport", "div[class*='arrive-box'] div[class*='airport']"]
+DAY_SELECTORS = [".arrive-box .day", "span[class*='crossDays']", "span[class*='day']"]
 PRICE_SELECTORS = [
-    "div[class*='domestic-flight-price']",
-    "div[class*='flight-price']",
+    "div.domestic-flight-price",
+    "div.flight-price",
     "div[class*='price-box'] div[class*='price']",
     "div[class*='price']",
     "span[class*='price']",
@@ -61,7 +71,8 @@ CLOSE_SELECTORS = [
 _NO_RESULT_HINTS = ["没有找到", "无航班", "暂无航班", "抱歉", "无结果"]
 
 _HHMM_RE = re.compile(r"(?<!\d)\d{1,2}:\d{2}(?!\d)")
-_AIRLINE_PREFIX = {  # 航班号前缀 → 航司名(兜底;卡内文本通常已有中文名)
+_FLIGHT_NO_RE = re.compile(r"([A-Z]{2}\d{3,4})")
+_AIRLINE_PREFIX = {  # 航班号前缀 → 航司名(兜底;卡内通常有中文名/logo alt)
     "CA": "中国国航", "MU": "东方航空", "CZ": "南方航空", "HU": "海南航空",
     "3U": "四川航空", "MF": "厦门航空", "ZH": "深圳航空", "SC": "山东航空",
     "KN": "中国联合航空", "GS": "天津航空", "HO": "吉祥航空", "9C": "春秋航空",
@@ -72,8 +83,14 @@ _AIRLINE_PREFIX = {  # 航班号前缀 → 航司名(兜底;卡内文本通常�
 }
 
 _CABIN_RE = re.compile(r"(经济舱|公务舱|头等舱|超级经济舱)")
-_PRICE_AMOUNT_RE = re.compile(r"¥\s*([0-9][0-9,]*)")
 
+# 抓所有后代元素 id,用于航班号兜底(如 airlineNameCA8341_… / comfort-MU5137_…)
+_COLLECT_IDS_JS = """(el) => {
+  const out = [];
+  for (const n of el.querySelectorAll('[id]')) out.push(n.id);
+  return out.join(' ');
+}"""
+# 滚动懒加载:列表容器滚到底 + 页面下滚
 _SCROLL_LIST_JS = """(els) => {
   const list = document.querySelector('.flight-list');
   if (list) list.scrollTo(0, list.scrollHeight);
@@ -81,17 +98,8 @@ _SCROLL_LIST_JS = """(els) => {
 }"""
 
 
-def _card_css(use_fallback: bool = False) -> str:
-    sels = CARD_FALLBACK_SELECTORS if use_fallback else CARD_SCOPED_SELECTORS
+def _css(sels: list[str]) -> str:
     return ", ".join(sels)
-
-
-def _price_css() -> str:
-    return ", ".join(PRICE_SELECTORS)
-
-
-def _close_css() -> str:
-    return ", ".join(CLOSE_SELECTORS)
 
 
 # ========================================================================== #
@@ -135,13 +143,13 @@ def _airline_from_lines(lines: list[str], flight_no: str) -> str:
 
 def _parse_stops(text: str) -> tuple[int, str]:
     """返回 (经停次数, 说明文本)。"""
-    if "直飞" in text:
-        return 0, "直飞"
-    if "经停" in text:
+    if "经停" in text and "中转" not in text:
         return 1, "经停"
     n = text.count("中转")
     if n:
         return min(n, 2), f"中转{n}次"
+    if "直飞" in text:
+        return 0, "直飞"
     # 无明确字样:多数国内列表默认直飞;保持 0 并交给原文诊断
     return 0, "直飞(推测)"
 
@@ -236,9 +244,8 @@ class CtripAdapter(SiteAdapter):
                 self._record_failure(page, q, settings, result, reason="未等到航班列表")
                 return result
 
-            # 列表出现后再静置,等价格等字段渲染完成
+            # 列表渐进渲染:静置一段时间,再滚动懒加载拉满
             page.wait_for_timeout(settings.settle_ms)
-            # 携程列表滚动懒加载:多滚几轮,把未渲染的真实卡片“拉”出来
             if settings.scroll_rounds > 0:
                 self._scroll_list_to_load(page, settings)
             cards = self._locate_cards(page).all()
@@ -250,10 +257,10 @@ class CtripAdapter(SiteAdapter):
                 except Exception:  # noqa: BLE001 单卡读取失败按跳过处理
                     text = ""
                 if not text.strip():
-                    placeholder += 1  # 空占位节点(列表骨架/尚未渲染)
+                    placeholder += 1  # 空占位节点(尚未渲染)
                     continue
                 try:
-                    if self._parse_card_text(text, card, q, result):
+                    if self._parse_card(card, text, q, result):
                         parsed += 1
                     else:
                         skipped += 1
@@ -262,7 +269,7 @@ class CtripAdapter(SiteAdapter):
                     skipped += 1
             if placeholder:
                 result.warnings.append(
-                    f"列表含 {placeholder} 个空占位节点(航班未渲染/骨架)"
+                    f"列表含 {placeholder} 个空占位节点(未渲染/骨架)"
                 )
             if skipped:
                 result.warnings.append(f"跳过 {skipped} 个非航班/异常卡片")
@@ -300,7 +307,7 @@ class CtripAdapter(SiteAdapter):
         """尽力点掉可能遮挡的弹层(登录引导/优惠券等),失败不致命。"""
         for _ in range(3):
             try:
-                close_btn = page.locator(_close_css()).first
+                close_btn = page.locator(_css(CLOSE_SELECTORS)).first
                 if close_btn.count() and close_btn.is_visible():
                     close_btn.click(timeout=1500)
                     page.wait_for_timeout(300)
@@ -317,13 +324,13 @@ class CtripAdapter(SiteAdapter):
     # ------------------------------------------------------------------ #
     def _locate_cards(self, page: Page):
         """首选限定容器的卡片选择器;找不到再退回泛化写法。"""
-        scoped = page.locator(_card_css(use_fallback=False))
+        scoped = page.locator(_css(CARD_SCOPED_SELECTORS))
         try:
             if scoped.count() > 0:
                 return scoped
         except Exception:  # noqa: BLE001
             pass
-        return page.locator(_card_css(use_fallback=True))
+        return page.locator(_css(CARD_FALLBACK_SELECTORS))
 
     # ------------------------------------------------------------------ #
     def _wait_cards(self, page: Page, settings) -> List:
@@ -342,7 +349,7 @@ class CtripAdapter(SiteAdapter):
     # ------------------------------------------------------------------ #
     def _scroll_list_to_load(self, page: Page, settings) -> None:
         """滚动懒加载:把列表滚到底,直到卡片数稳定或轮次用尽(尽力而为)。"""
-        loc = page.locator(_card_css(use_fallback=False))
+        loc = page.locator(_css(CARD_SCOPED_SELECTORS))
         prev = -1
         for _ in range(settings.scroll_rounds):
             try:
@@ -360,34 +367,108 @@ class CtripAdapter(SiteAdapter):
             prev = n
 
     # ------------------------------------------------------------------ #
-    def _pick_price(self, card, card_text: str) -> Optional[float]:
-        """价格解析:优先价格节点,失败则取卡内最小合理金额兜底。"""
-        try:
-            node = card.locator(_price_css()).first
-            if node.count() > 0:
-                t = node.inner_text()
-                p = clean_price(t)
-                if p is not None:
-                    return p
-        except Exception:  # noqa: BLE001 定位器异常不致命
-            pass
-        return _price_from_text(card_text)
+    # —— 单卡节点化抽取 ——
+    def _first_text(self, card, sels: list[str], timeout_ms: int = 800) -> str:
+        for sel in sels:
+            try:
+                loc = card.locator(sel).first
+                if loc.count() > 0:
+                    t = (loc.inner_text(timeout=timeout_ms) or "").strip()
+                    if t:
+                        return t
+            except Exception:  # noqa: BLE001
+                continue
+        return ""
 
-    # ------------------------------------------------------------------ #
-    def _parse_card_text(self, text: str, card, q: SearchQuery, result: SiteResult) -> bool:
-        """解析一张有内容的卡片:价格节点优先,文本解析为辅。
+    def _pick_price(self, card) -> Optional[float]:
+        """价格节点优先:取第一个能解析出合理金额的价格节点。"""
+        for sel in PRICE_SELECTORS:
+            try:
+                loc = card.locator(sel).first
+                if loc.count() > 0:
+                    p = clean_price(loc.inner_text(timeout=800))
+                    if p is not None and p >= 30:
+                        return p
+            except Exception:  # noqa: BLE001
+                continue
+        return None
 
-        返回 True 表示成功产出 Flight;False 表示非航班内容(静默跳过)。
-        """
-        price_hint = None
+    def _flight_no_of(self, card, text: str) -> Optional[str]:
+        """航班号:1) .plane-No 节点文本;2) 后代元素 id(airlineNameCA8341_…);
+        3) 卡片文本正则。返回 None 表示拿不到。"""
         try:
-            price_hint = self._pick_price(card, text)
+            t = self._first_text(card, NO_SELECTORS)
+            m = _FLIGHT_NO_RE.search(t)
+            if m:
+                return m.group(1)
         except Exception:  # noqa: BLE001
             pass
-        flight = flight_from_card_text(text, q, site=self.site, price_hint=price_hint)
-        if flight is None:
-            return False
-        result.flights.append(flight)
+        try:
+            ids = card.evaluate(_COLLECT_IDS_JS) or ""
+            m = _FLIGHT_NO_RE.search(ids)
+            if m:
+                return m.group(1)
+        except Exception:  # noqa: BLE001
+            pass
+        m = _FLIGHT_NO_RE.search(text or "")
+        return m.group(1) if m else None
+
+    def _parse_card(self, card, text: str, q: SearchQuery, result: SiteResult) -> bool:
+        """解析一张有内容的卡片(节点优先)。返回 True = 产出 Flight。"""
+        flight_no = self._flight_no_of(card, text)
+        if not flight_no:
+            # 纯文本路径(离线单测覆盖同款判定逻辑)
+            fallback = flight_from_card_text(text, q, site=self.site)
+            if fallback is None:
+                return False
+            result.flights.append(fallback)
+            return True
+
+        airline = ""
+        try:
+            img = card.locator("img.airline-logo").first
+            if img.count() > 0:
+                airline = (img.get_attribute("alt") or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+        if not airline:
+            airline = self._first_text(card, AIRLINE_NAME_SELECTORS)
+        if not airline:
+            airline = _AIRLINE_PREFIX.get(flight_no[:2], flight_no[:2])
+
+        dep_t = self._first_text(card, DEP_TIME_SELECTORS)
+        arr_t = self._first_text(card, ARR_TIME_SELECTORS)
+        dep_ap = self._first_text(card, DEP_AIRPORT_SELECTORS)
+        arr_ap = self._first_text(card, ARR_AIRPORT_SELECTORS)
+        day_t = self._first_text(card, DAY_SELECTORS)
+        dep_time = _HHMM_RE.search(dep_t).group(0) if _HHMM_RE.search(dep_t) else ""
+        arr_time = _HHMM_RE.search(arr_t).group(0) if _HHMM_RE.search(arr_t) else ""
+        arr_day_offset = 1 if re.search(r"\+1天|次日", f"{arr_t} {day_t}") else 0
+
+        stops, stop_info = _parse_stops(text)
+        cabin_m = _CABIN_RE.search(text)
+        cabin = cabin_m.group(1) if cabin_m else "经济舱(默认)"
+        price = self._pick_price(card)
+        if price is None:
+            price = _price_from_text(text)
+
+        result.flights.append(
+            Flight(
+                airline=airline,
+                flight_no=flight_no,
+                dep_airport=dep_ap or q.dep_city,
+                arr_airport=arr_ap or q.arr_city,
+                dep_time=dep_time,
+                arr_time=arr_time,
+                arr_day_offset=arr_day_offset,
+                stops=stops,
+                stop_info=stop_info,
+                cabin=cabin,
+                price=price,
+                site=self.site,
+                raw=text[:300],
+            )
+        )
         return True
 
     # ------------------------------------------------------------------ #
