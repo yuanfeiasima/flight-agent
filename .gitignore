@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+.uv-cache/
+.uv-python/
+.pytest_cache/
+.python-version
+artifacts/*
+.chrome-profile/
+*.log
+.DS_Store
+.idea/
+.vscode/
