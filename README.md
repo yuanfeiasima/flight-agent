@@ -21,6 +21,9 @@ flight-agent/
 │   │   └── ctrip.py           # 携程适配器:搜索 → 等待 → 滚动懒加载 → 抽取航班列表
 │   ├── engine/
 │   │   └── compare.py         # 比价决策引擎:归一化/约束过滤/去重/排序(纯逻辑,可单测)
+│   ├── webapp/
+│   │   ├── server.py          # 本地网页版:HTTP 服务 + 后台查询队列 + 历史存档
+│   │   └── static/index.html  # 中文 GUI(表单/结果表格/历史,零外部依赖)
 │   └── cli.py                 # 命令行入口
 ├── tools/
 │   ├── probe.py               # 调试探针:抓真实页面 HTML 看 DOM 结构(只存 HTML,不截图)
@@ -81,6 +84,23 @@ uv run python -m flight_agent.cli \
 > `.uv-cache/`;直接敲 `uv run` 前也建议 `export UV_CACHE_DIR="$PWD/.uv-cache"`。
 
 输出:终端打印**符合约束的航班按价格升序**的表格 + 最低价推荐;同时把结构化结果写入 `artifacts/latest_query.json`。
+
+## 网页版(日常使用推荐,替代命令行)
+
+本地起一个中文网页 GUI:填表单 → 点查询 → 看按价格排序的表格与最低价推荐;查询在后台
+排队执行,历史自动存档、可点击回看。**零新增依赖**(Python 标准库)。
+
+```bash
+cd /Users/grace/Documents/open_code/flight-agent
+# 前置:先保持“调试 Chrome”开着(见上文第 2 步)
+uv run python -m flight_agent.webapp.server        # 默认 http://127.0.0.1:8712 ,自动开浏览器
+# 可选: --port 9000 换端口; --no-open 不自动开浏览器
+```
+
+- 查询期间页面显示进度,完成后展示:最低价高亮卡 + 全量表格(价格升序/跨天 +1天/中转标注)+ 提示与告警;
+- 右上角状态点实时反映调试 Chrome 是否在线;关闭前请勿关掉调试 Chrome;
+- 结果同时写入 `artifacts/latest_query.json` 与 `artifacts/history/`,历史面板可直接点看;
+- 若 Chrome 未连接,页面会给出 `bash scripts/open_chrome_debug.sh` 的提示。
 
 ## 比价口径与约束(可在命令行覆盖,默认值见 `config.py`)
 

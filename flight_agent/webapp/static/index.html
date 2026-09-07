@@ -1,0 +1,341 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>flight-agent · 机票自动比价</title>
+<style>
+  :root{
+    --bg:#f4f6fa; --panel:#ffffff; --line:#e3e8f0; --ink:#1f2733; --sub:#6b7686;
+    --acc:#0b66c3; --acc2:#0a7d5a; --warn:#b4540a; --bad:#c0352b; --best:#fff7e0;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.55 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
+       background:var(--bg);color:var(--ink)}
+  header{display:flex;align-items:center;gap:14px;padding:14px 22px;background:#fff;
+         border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  header h1{font-size:18px;margin:0;font-weight:700}
+  #chromeStatus{margin-left:auto;padding:5px 12px;border-radius:999px;font-size:12.5px;
+                border:1px solid var(--line);background:var(--bg)}
+  #chromeStatus.ok{color:var(--acc2);border-color:#bfe3d3;background:#e8f6ef}
+  #chromeStatus.bad{color:var(--bad);border-color:#f0c9c5;background:#fdeeed}
+  .wrap{display:flex;gap:18px;padding:18px 22px;align-items:flex-start;max-width:1280px;margin:0 auto}
+  main{flex:1 1 auto;min-width:0}
+  aside{flex:0 0 300px;background:var(--panel);border:1px solid var(--line);
+        border-radius:12px;padding:14px;position:sticky;top:74px;max-height:calc(100vh-92px);
+        overflow:auto}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
+         padding:16px 18px;margin-bottom:16px}
+  h2{font-size:15px;margin:0 0 10px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 12px}
+  label{display:block;font-size:12.5px;color:var(--sub);margin-bottom:4px}
+  input,select{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:8px;
+               font-size:14px;background:#fff;color:var(--ink)}
+  input:focus,select:focus{outline:2px solid #b7d6f5;border-color:var(--acc)}
+  .actions{margin-top:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  button{cursor:pointer;border:0;border-radius:9px;padding:9px 22px;font-size:14px}
+  #go{background:var(--acc);color:#fff;font-weight:600}
+  #go:disabled{opacity:.55;cursor:not-allowed}
+  .hint{font-size:12.5px;color:var(--sub)}
+  .hint b{color:var(--acc2)}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#cbd2dc;
+       margin-right:6px;vertical-align:-1px}
+  .dot.on{background:var(--acc2);animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+  #errBox{display:none;background:#fdeeed;border:1px solid #f0c9c5;color:var(--bad);
+          border-radius:10px;padding:10px 14px;margin-bottom:14px;white-space:pre-wrap}
+  .best{background:var(--best);border:1px solid #eedd9a;border-radius:12px;padding:12px 16px;
+        margin:12px 0}
+  .best .lbl{font-size:12.5px;color:#8a6d1a}
+  .best .row{font-size:17px;font-weight:700;margin-top:4px}
+  .warn{background:#fdf3e7;border:1px solid #f2dcbf;color:var(--warn);border-radius:10px;
+        padding:8px 14px;margin:10px 0;font-size:12.8px}
+  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:13.5px}
+  th,td{padding:7px 8px;border-bottom:1px solid #eef2f7;text-align:left;white-space:nowrap}
+  th{color:var(--sub);font-weight:600;font-size:12.5px;position:sticky;top:0;background:#fafbfd}
+  td.num{font-variant-numeric:tabular-nums}
+  tr.top td{background:#fffdf4}
+  .price{font-weight:700;color:var(--acc2)}
+  .day1{color:var(--bad);font-size:12px;margin-left:3px}
+  .stops{color:var(--sub)}
+  .muted{color:var(--sub);font-size:12.5px}
+  #historyList{list-style:none;margin:0;padding:0}
+  #historyList li{border-bottom:1px dashed var(--line);padding:8px 2px;cursor:pointer;
+                  border-radius:6px}
+  #historyList li:hover{background:#f5f8fc}
+  #historyList li .t{font-size:12.8px}
+  #historyList li .m{font-size:12px;color:var(--sub);margin-top:2px}
+  .st{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;margin-left:6px}
+  .st.done{background:#e8f6ef;color:var(--acc2)}
+  .st.running,.st.queued{background:#e7f0fb;color:var(--acc)}
+  .st.failed{background:#fdeeed;color:var(--bad)}
+  @media (max-width:960px){.wrap{flex-direction:column}aside{flex:1;position:static;max-height:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>✈️ flight-agent · 机票自动比价</h1>
+  <span id="chromeStatus" class="bad">检测 Chrome…</span>
+</header>
+
+<div class="wrap">
+<main>
+  <section class="panel">
+    <h2>查询条件</h2>
+    <form id="qf" autocomplete="off">
+      <div class="grid">
+        <div><label>出发城市</label><input id="dep" list="cityList" placeholder="如: 北京 / BJS"></div>
+        <div><label>到达城市</label><input id="arr" list="cityList" placeholder="如: 上海 / SHA"></div>
+        <div><label>出发日期</label><input id="date" type="date"></div>
+        <div><label>舱位</label>
+          <select id="cabin"><option>经济</option><option>公务</option><option>头等</option></select>
+        </div>
+        <div><label>经停</label>
+          <select id="stops">
+            <option value="0">仅直飞</option>
+            <option value="1">允许 1 次中转</option>
+            <option value="2">中转不限(≤2)</option>
+          </select>
+        </div>
+        <div><label>出发不早于</label><input id="depAfter" type="time" value="00:00"></div>
+        <div><label>到达不晚于</label><input id="arrBefore" type="time" value="23:59"></div>
+        <div><label>展示条数</label><input id="top" type="number" min="1" max="100" value="20"></div>
+      </div>
+      <datalist id="cityList"></datalist>
+      <div class="actions">
+        <button id="go" type="submit">开始查询</button>
+        <span class="hint">查询约 30~60 秒(页面渐进渲染+滚动加载),期间请勿关闭调试 Chrome。</span>
+      </div>
+    </form>
+  </section>
+
+  <div id="runPanel" class="panel" style="display:none">
+    <h2><span class="dot on" id="runDot"></span><span id="runText">查询中…</span></h2>
+    <div class="muted" id="runSummary"></div>
+  </div>
+
+  <div id="errBox"></div>
+
+  <section class="panel" id="resultPanel" style="display:none">
+    <h2 id="resTitle">结果</h2>
+    <div id="warnBox"></div>
+    <div class="best" id="bestBox" style="display:none">
+      <div class="lbl">★ 最低价推荐(仅供比价参考 —— 下单/支付请回网站人工确认)</div>
+      <div class="row" id="bestRow"></div>
+    </div>
+    <div class="muted" id="resMeta"></div>
+    <div style="overflow:auto;max-height:62vh">
+    <table>
+      <thead><tr>
+        <th>#</th><th>航司</th><th>航班号</th><th>起飞机场 → 到达机场</th>
+        <th>出发 → 到达</th><th>经停</th><th>舱位</th><th>价格</th>
+      </tr></thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    </div>
+  </section>
+</main>
+
+<aside>
+  <h2>历史查询</h2>
+  <ul id="historyList"><li class="muted">暂无记录</li></ul>
+</aside>
+</div>
+
+<script>
+"use strict";
+const $ = s => document.querySelector(s);
+const CITIES = ["北京","上海","广州","深圳","成都","重庆","杭州","西安","武汉","南京","昆明",
+ "厦门","长沙","青岛","天津","大连","郑州","沈阳","三亚","海口","乌鲁木齐","哈尔滨","贵阳",
+ "南宁","福州","济南","太原","兰州","长春","合肥","石家庄","南昌","呼和浩特","银川","西宁","拉萨"];
+
+function fmtDate(d){ return d.toISOString().slice(0,10); }
+function plusDays(n){ const d=new Date(); d.setDate(d.getDate()+n); return fmtDate(d); }
+function esc(){ /* 一律用 textContent,不拼 HTML */ }
+
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  const j = await r.json().catch(()=>({error:"响应解析失败"}));
+  if(!r.ok && !j.error) j.error = "HTTP "+r.status;
+  return j;
+}
+
+// ---------- 表单 ----------
+function fillDefault(){
+  const saved = JSON.parse(localStorage.getItem("fa-form")||"null");
+  if(saved){
+    $("#dep").value=saved.dep||""; $("#arr").value=saved.arr||"";
+    $("#date").value=saved.date||plusDays(7); $("#cabin").value=saved.cabin||"经济";
+    $("#stops").value=(saved.stops??0).toString(); $("#top").value=saved.top||20;
+    $("#depAfter").value=saved.depAfter||"00:00"; $("#arrBefore").value=saved.arrBefore||"23:59";
+  } else {
+    $("#dep").value="北京"; $("#arr").value="上海";
+    $("#date").value=plusDays(7); $("#stops").value="0"; $("#top").value=20;
+  }
+}
+function collectForm(){
+  const f = {
+    dep:$("#dep").value.trim(), arr:$("#arr").value.trim(), date:$("#date").value,
+    cabin:$("#cabin").value, max_stops:Number($("#stops").value),
+    dep_after:$("#depAfter").value||"00:00", arr_before:$("#arrBefore").value||"23:59",
+    top:Number($("#top").value)||20
+  };
+  localStorage.setItem("fa-form", JSON.stringify(f));
+  return f;
+}
+
+// ---------- 状态 ----------
+function setChrome(ok, detail){
+  const el=$("#chromeStatus");
+  el.className = ok?"ok":"bad";
+  el.textContent = ok ? ("Chrome 已连接 · "+(detail||"").split(" ")[0]) : "Chrome 未连接";
+  el.title = ok ? (detail||"") : "请运行: bash scripts/open_chrome_debug.sh 并保持 Chrome 打开";
+}
+function showErr(msg){ const b=$("#errBox"); b.style.display=msg?"block":"none"; b.textContent=msg; }
+function showRun(on, summary){
+  $("#runPanel").style.display=on?"block":"none";
+  $("#go").disabled=on;
+  if(on && summary) $("#runSummary").textContent=summary;
+}
+function warnTexts(task){
+  const out=[];
+  const push=(w)=>{ if(w && !out.includes(w)) out.push(w); };
+  (task.result||{}).sites?.forEach(s=>(s.warnings||[]).forEach(push));
+  (task.result||{}).recommendation?.warnings?.forEach(push);
+  return out;
+}
+function stopLabel(f){
+  if(f.stops===0) return "直飞";
+  return f.stop_info || (f.stops>0?("中转"+f.stops):"");
+}
+
+// ---------- 渲染结果 ----------
+function renderResult(task){
+  $("#resultPanel").style.display="block";
+  $("#resTitle").textContent="查询结果 · "+task.query_summary;
+  const rec = task.result.recommendation, sites = task.result.sites;
+  const ws = warnTexts(task);
+  $("#warnBox").innerHTML="";
+  ws.slice(0,8).forEach(w=>{
+    const d=document.createElement("div"); d.className="warn"; d.textContent="[!] "+w;
+    $("#warnBox").appendChild(d);
+  });
+
+  const best = rec.best;
+  const bb=$("#bestBox");
+  if(best && best.price!=null){
+    bb.style.display="block";
+    const r=$("#bestRow"); r.textContent="";
+    r.textContent=`${best.airline||""} ${best.flight_no}  ${best.dep_airport}→${best.arr_airport}  `+
+      `${best.dep_time||"--:--"}→${best.arr_time||"--:--"}${best.arr_day_offset?"(+1天)":""}  `+
+      `¥${best.price.toLocaleString("zh-CN")} 起`;
+  } else bb.style.display="none";
+
+  const ranked = rec.ranked||[];
+  const priced = ranked.filter(f=>f.price!=null).length;
+  $("#resMeta").textContent=
+    `共 ${ranked.length} 条符合约束,按价格升序(有价 ${priced} 条)`+
+    (rec.dropped_no_price?` · 无价 ${rec.dropped_no_price} 条`:"")+
+    (sites.length?` · 数据源: ${sites.map(s=>s.site+" "+s.flights.length+"条").join(", ")}`:"");
+  const tb=$("#tbody"); tb.innerHTML="";
+  ranked.forEach((f,i)=>{
+    const tr=document.createElement("tr");
+    if(i===0 && f.price!=null) tr.className="top";
+    const td=(cls)=>{ const c=document.createElement("td"); if(cls) c.className=cls; tr.appendChild(c); return c; };
+    td().textContent=(i+1);
+    td().textContent=f.airline||"—";
+    td().textContent=f.flight_no||"—";
+    td().textContent=`${f.dep_airport||"?"} → ${f.arr_airport||"?"}`;
+    const t=td(); t.textContent=`${f.dep_time||"--:--"} → ${f.arr_time||"--:--"}`;
+    if(f.arr_day_offset){ const s=document.createElement("span"); s.className="day1"; s.textContent="+1天"; t.appendChild(s); }
+    td("stops").textContent=stopLabel(f);
+    td().textContent=f.cabin||"—";
+    const p=td("price num");
+    p.textContent = f.price!=null ? "¥"+f.price.toLocaleString("zh-CN") : "无价";
+    tb.appendChild(tr);
+  });
+  window.scrollTo({top:0,behavior:"smooth"});
+}
+
+// ---------- 任务轮询 ----------
+let pollTimer=null;
+async function submitQuery(ev){
+  ev.preventDefault();
+  showErr("");
+  const payload=collectForm();
+  showRun(true, "入队中…");
+  const r=await api("/api/query",{method:"POST",headers:{"Content-Type":"application/json"},
+                                 body:JSON.stringify(payload)});
+  if(r.error){ showErr("无法开始查询: "+r.error); showRun(false); return; }
+  $("#runSummary").textContent=r.query_summary;
+  poll(r.id);
+}
+function poll(tid){
+  clearTimeout(pollTimer);
+  pollTimer=setTimeout(async ()=>{
+    const t=await api("/api/task/"+encodeURIComponent(tid));
+    if(t.error){ showErr("查询任务出错: "+t.error); showRun(false); return; }
+    if(t.state==="queued"||t.state==="running"){ $("#runText").textContent=
+        t.state==="queued"?"排队等待…":"抓取比价中(约 30~60 秒)…"; poll(tid); return; }
+    clearTimeout(pollTimer);
+    showRun(false);
+    if(t.state==="done" && t.result){
+      renderResult(t); loadHistory();
+    } else {
+      showErr("查询失败:\n"+(t.error||"未知错误"));
+    }
+  },1500);
+}
+
+// ---------- 历史 ----------
+async function loadHistory(){
+  const h=await api("/api/history");
+  const ul=$("#historyList"); ul.innerHTML="";
+  const tasks=h.tasks||[];
+  if(!tasks.length){ const li=document.createElement("li"); li.className="muted"; li.textContent="暂无记录"; ul.appendChild(li); return; }
+  tasks.forEach(t=>{
+    const li=document.createElement("li");
+    li.title="点击查看结果";
+    li.onclick=()=>viewTask(t.id);
+    const row=document.createElement("div"); row.className="t";
+    row.textContent=t.query_summary;
+    const st=document.createElement("span"); st.className="st "+t.state;
+    st.textContent={queued:"排队",running:"进行中",done:"完成",failed:"失败"}[t.state]||t.state;
+    row.appendChild(st);
+    const m=document.createElement("div"); m.className="m";
+    if(t.state==="done" && t.summary){
+      m.textContent=(t.summary.best_flight?("最低 "+(t.summary.best_flight||"")+
+        (t.summary.best_price!=null?" ¥"+t.summary.best_price:"")+" · ":"")+
+        "符合 "+t.summary.total+" 条")+(t.created?" · "+t.created.slice(11,16):"");
+    } else if(t.state==="failed"){ m.textContent=(t.error||"").slice(0,60); }
+    else { m.textContent=t.created?t.created.slice(5,16):""; }
+    li.appendChild(row); li.appendChild(m);
+    ul.appendChild(li);
+  });
+}
+async function viewTask(tid){
+  const t=await api("/api/task/"+encodeURIComponent(tid));
+  if(t.error){ showErr(t.error); return; }
+  if(t.state==="done" && t.result){ renderResult(t); showErr(""); }
+  else if(t.state==="failed"){ showErr("该任务失败: "+(t.error||"")); }
+  else { showErr("该任务仍在 "+t.state+" 状态"); }
+}
+
+// ---------- 启动 ----------
+async function init(){
+  try{ const c=await api("/api/cities"); if(c.cities){ $("#cityList").innerHTML="";
+       c.cities.forEach(x=>{ const o=document.createElement("option"); o.value=x; $("#cityList").appendChild(o); }); }
+  }catch(e){}
+  fillDefault();
+  $("#qf").addEventListener("submit",submitQuery);
+  const h=await api("/api/health");
+  setChrome(!!h.chrome, h.chrome_detail||"");
+  if(!h.chrome && h.hint) showErr("⚠ "+h.hint);
+  await loadHistory();
+  // 每 30s 刷新一次 Chrome 状态
+  setInterval(async()=>{ const x=await api("/api/health"); setChrome(!!x.chrome, x.chrome_detail||""); },30000);
+}
+init();
+</script>
+</body>
+</html>
