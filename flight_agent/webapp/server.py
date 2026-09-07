@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import sys
 import threading
 import time
 import urllib.request
@@ -375,7 +376,18 @@ def main(argv: list[str] | None = None) -> int:
     BoundHandler.manager = manager  # noqa: 类体不闭合外层作用域,改用赋值注入
     BoundHandler.settings = settings
 
-    httpd = ThreadingHTTPServer((args.host, args.port), BoundHandler)
+    try:
+        httpd = ThreadingHTTPServer((args.host, args.port), BoundHandler)
+    except OSError as exc:
+        if exc.errno == 48:  # Address already in use
+            print(
+                f"\n端口 {args.port} 已被占用 —— 可能网页版已在运行。\n"
+                f"  · 直接打开 http://{args.host}:{args.port} 即可;\n"
+                f"  · 或另起一个实例用其它端口: --port 9000\n",
+                file=sys.stderr,
+            )
+            return 1
+        raise
     url = f"http://{args.host}:{args.port}"
     print("=" * 62)
     print(f" flight-agent 网页版 v{__version__}")
