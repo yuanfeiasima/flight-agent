@@ -154,10 +154,17 @@ function plusDays(n){ const d=new Date(); d.setDate(d.getDate()+n); return fmtDa
 function esc(){ /* 一律用 textContent,不拼 HTML */ }
 
 async function api(path, opts){
-  const r = await fetch(path, opts);
-  const j = await r.json().catch(()=>({error:"响应解析失败"}));
-  if(!r.ok && !j.error) j.error = "HTTP "+r.status;
-  return j;
+  const ctl = new AbortController();
+  const timer = setTimeout(()=>ctl.abort(), 10000);   // 任何请求最多等 10s,绝不无限卡
+  try {
+    const r = await fetch(path, {...(opts||{}), signal: ctl.signal});
+    const j = await r.json().catch(()=>({error:"响应解析失败"}));
+    if(!r.ok && !j.error) j.error = "HTTP "+r.status;
+    return j;
+  } catch(e){
+    return {error: e && e.name==="AbortError" ? "请求超时:服务没有响应" :
+            ("无法连接服务("+((e&&e.message)||e)+")")};
+  } finally { clearTimeout(timer); }
 }
 
 // ---------- 表单 ----------
@@ -321,19 +328,33 @@ async function viewTask(tid){
   else { showErr("该任务仍在 "+t.state+" 状态"); }
 }
 
-// ---------- 启动 ----------
-async function init(){
-  try{ const c=await api("/api/cities"); if(c.cities){ $("#cityList").innerHTML="";
-       c.cities.forEach(x=>{ const o=document.createElement("option"); o.value=x; $("#cityList").appendChild(o); }); }
-  }catch(e){}
+// ---------- 启动(不依赖网络即可操作:按钮先挂监听,再异步刷新周边信息) ----------
+function init(){
+  $("#qf").addEventListener("submit", submitQuery);
   fillDefault();
-  $("#qf").addEventListener("submit",submitQuery);
-  const h=await api("/api/health");
+  loadCities();
+  refreshHealth();
+  loadHistory();
+  setInterval(refreshHealth, 30000);
+}
+async function loadCities(){
+  const c = await api("/api/cities");
+  if(c.error || !c.cities) return;
+  $("#cityList").innerHTML="";
+  c.cities.forEach(x=>{ const o=document.createElement("option"); o.value=x; $("#cityList").appendChild(o); });
+}
+async function refreshHealth(){
+  const h = await api("/api/health");
+  if(h.error){
+    const el=$("#chromeStatus"); el.className="bad"; el.textContent="服务未响应";
+    el.title="请确认网页版服务还在运行(uv run python -m flight_agent.webapp.server)";
+    return;
+  }
   setChrome(!!h.chrome, h.chrome_detail||"");
-  if(!h.chrome && h.hint) showErr("⚠ "+h.hint);
-  await loadHistory();
-  // 每 30s 刷新一次 Chrome 状态
-  setInterval(async()=>{ const x=await api("/api/health"); setChrome(!!x.chrome, x.chrome_detail||""); },30000);
+  if(!h.chrome){
+    const cur=($("#errBox").textContent||"");
+    if(h.hint && (cur==="" || /Chrome|请先运行/.test(cur))) showErr("⚠ "+h.hint);
+  }
 }
 init();
 </script>
