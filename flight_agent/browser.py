@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
-from playwright.sync_api import Playwright, sync_playwright
+if TYPE_CHECKING:
+    from playwright.sync_api import Playwright
 
 log = logging.getLogger("flight-agent.browser")
 
@@ -31,6 +33,12 @@ class BrowserSession:
     # ------------------------------------------------------------------ #
     @classmethod
     def connect(cls, host: str = "127.0.0.1", port: int = 9222) -> "BrowserSession":
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise RuntimeError(
+                "未安装 Playwright。请先运行: uv pip install -r requirements.txt"
+            ) from exc
         cdp_url = f"http://{host}:{port}"
         pw = sync_playwright().start()
         try:
@@ -69,7 +77,12 @@ class BrowserSession:
         if not self._browser.contexts:
             return "(没有打开的页面)"
         pages = self._browser.contexts[0].pages
-        return pages[0].title if pages else "(窗口内没有标签页)"
+        if not pages:
+            return "(窗口内没有标签页)"
+        try:
+            return pages[0].title() or pages[0].url
+        except Exception:  # noqa: BLE001 页面正在跳转时 title() 可能抛错
+            return pages[0].url
 
     def close(self) -> None:
         """断开 CDP 连接(不关闭用户的 Chrome)。"""

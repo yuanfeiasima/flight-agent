@@ -4,107 +4,494 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>flight-agent · 机票自动比价</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='15' fill='%231d6fe0'/%3E%3Cpath d='M13 12 L56 32 L13 52 L26 32 Z' fill='%23fff'/%3E%3C/svg%3E">
 <style>
   :root{
-    --bg:#f4f6fa; --panel:#ffffff; --line:#e3e8f0; --ink:#1f2733; --sub:#6b7686;
-    --acc:#0b66c3; --acc2:#0a7d5a; --warn:#b4540a; --bad:#c0352b; --best:#fff7e0;
+    --bg:#f2f5fa; --bg2:#e9eef7;
+    --panel:#fff; --line:#e4e9f2; --line2:#eef2f8;
+    --ink:#16202e; --ink2:#3d4c60; --sub:#6c7a8f; --faint:#93a0b3;
+    --acc:#1d6fe0; --acc-d:#1559b8; --acc-l:#eaf2fe;
+    --ok:#0d8a5f; --ok-l:#e7f7f0; --ok-b:#bfe6d6;
+    --warn:#a9620a; --warn-l:#fdf4e8; --warn-b:#f0dcbe;
+    --bad:#c4372a; --bad-l:#fdeeec; --bad-b:#f2cbc6;
+    --gold:#8a6a12; --gold-l:#fffaeb; --gold-b:#f0e2ad;
+    --sh:0 1px 2px rgba(16,30,54,.04), 0 10px 28px -14px rgba(16,30,54,.18);
+    --sh2:0 2px 6px rgba(16,30,54,.06), 0 18px 40px -20px rgba(16,30,54,.28);
+    --ctl-h:42px;              /* 表单控件统一高度:换行/圆角都能对齐 */
+    --ring:0 0 0 3.5px rgba(29,111,224,.14);
   }
   *{box-sizing:border-box}
-  body{margin:0;font:14px/1.55 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;
-       background:var(--bg);color:var(--ink)}
-  header{display:flex;align-items:center;gap:14px;padding:14px 22px;background:#fff;
-         border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
-  header h1{font-size:18px;margin:0;font-weight:700}
-  #chromeStatus{margin-left:auto;padding:5px 12px;border-radius:999px;font-size:12.5px;
-                border:1px solid var(--line);background:var(--bg)}
-  #chromeStatus.ok{color:var(--acc2);border-color:#bfe3d3;background:#e8f6ef}
-  #chromeStatus.bad{color:var(--bad);border-color:#f0c9c5;background:#fdeeed}
-  .wrap{display:flex;gap:18px;padding:18px 22px;align-items:flex-start;max-width:1280px;margin:0 auto}
-  main{flex:1 1 auto;min-width:0}
-  aside{flex:0 0 300px;background:var(--panel);border:1px solid var(--line);
-        border-radius:12px;padding:14px;position:sticky;top:74px;max-height:calc(100vh-92px);
-        overflow:auto}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:12px;
-         padding:16px 18px;margin-bottom:16px}
-  h2{font-size:15px;margin:0 0 10px}
-  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px 12px}
-  label{display:block;font-size:12.5px;color:var(--sub);margin-bottom:4px}
-  input,select{width:100%;padding:7px 9px;border:1px solid var(--line);border-radius:8px;
-               font-size:14px;background:#fff;color:var(--ink)}
-  input:focus,select:focus{outline:2px solid #b7d6f5;border-color:var(--acc)}
-  .actions{margin-top:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
-  button{cursor:pointer;border:0;border-radius:9px;padding:9px 22px;font-size:14px}
-  #go{background:var(--acc);color:#fff;font-weight:600}
-  #go:disabled{opacity:.55;cursor:not-allowed}
-  .hint{font-size:12.5px;color:var(--sub)}
-  .hint b{color:var(--acc2)}
-  .dot{display:inline-block;width:10px;height:10px;border-radius:50%;background:#cbd2dc;
-       margin-right:6px;vertical-align:-1px}
-  .dot.on{background:var(--acc2);animation:pulse 1.2s infinite}
-  @keyframes pulse{50%{opacity:.35}}
-  #errBox{display:none;background:#fdeeed;border:1px solid #f0c9c5;color:var(--bad);
-          border-radius:10px;padding:10px 14px;margin-bottom:14px;white-space:pre-wrap}
-  .best{background:var(--best);border:1px solid #eedd9a;border-radius:12px;padding:12px 16px;
-        margin:12px 0}
-  .best .lbl{font-size:12.5px;color:#8a6d1a}
-  .best .row{font-size:17px;font-weight:700;margin-top:4px}
-  .warn{background:#fdf3e7;border:1px solid #f2dcbf;color:var(--warn);border-radius:10px;
-        padding:8px 14px;margin:10px 0;font-size:12.8px}
-  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:13.5px}
-  th,td{padding:7px 8px;border-bottom:1px solid #eef2f7;text-align:left;white-space:nowrap}
-  th{color:var(--sub);font-weight:600;font-size:12.5px;position:sticky;top:0;background:#fafbfd}
-  td.num{font-variant-numeric:tabular-nums}
-  tr.top td{background:#fffdf4}
-  .price{font-weight:700;color:var(--acc2)}
-  .day1{color:var(--bad);font-size:12px;margin-left:3px}
-  .stops{color:var(--sub)}
+  .sr-only{
+    position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;
+    clip:rect(0 0 0 0);white-space:nowrap;border:0;
+  }
+  html,body{height:100%}
+  body{
+    margin:0;color:var(--ink);
+    font:14px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;
+    background:
+      radial-gradient(1100px 460px at 12% -8%, #e6efff 0%, rgba(230,239,255,0) 62%),
+      radial-gradient(900px 420px at 92% 2%, #eaf6f1 0%, rgba(234,246,241,0) 58%),
+      var(--bg);
+    -webkit-font-smoothing:antialiased;
+  }
+  .num{font-variant-numeric:tabular-nums}
+  a{color:var(--acc)}
+
+  /* ---------- 顶栏 ---------- */
+  header{display:none}  /* 隐藏整个顶栏 */
+  .brand{display:flex;align-items:center;gap:10px;font-size:16.5px;font-weight:700;letter-spacing:.2px}
+  .brand .logo{
+    width:30px;height:30px;border-radius:9px;flex:none;
+    background:linear-gradient(145deg,#4c86ff,#143cb4);
+    display:grid;place-items:center;color:#fff;font-size:15px;
+    box-shadow:0 4px 10px -3px rgba(29,111,224,.55);
+  }
+  .brand .sub{font-size:12px;font-weight:500;color:var(--faint);margin-left:2px}
+  #quitApp{
+    margin-left:auto;font-size:12.5px;font-weight:500;padding:6px 14px;border-radius:9px;flex:none;
+    border:1px solid var(--line);background:#fff;color:var(--sub);cursor:pointer;
+    transition:.16s ease;
+  }
+  #quitApp:hover{border-color:var(--bad-b);color:var(--bad);background:var(--bad-l)}
+
+  /* ---------- 布局 ---------- */
+  .wrap{padding:12px 26px 40px;max-width:1360px;margin:0 auto}
+  main{width:100%;min-width:0}
+  .panel{
+    background:var(--panel);border:1px solid var(--line);border-radius:16px;
+    padding:18px 20px;margin-bottom:16px;box-shadow:var(--sh);
+  }
+  h2{font-size:14.5px;margin:0 0 12px;font-weight:700;display:flex;align-items:center;gap:8px}
+  h2 .tag{font-size:11.5px;font-weight:600;color:var(--sub);background:var(--bg2);
+          border-radius:999px;padding:2px 9px}
+
+  /* ---------- 表单控件 ---------- */
+  label{display:block;font-size:12.4px;color:var(--sub);margin-bottom:6px;font-weight:600;
+        letter-spacing:.2px}
+  input,select{
+    width:100%;min-width:0;height:var(--ctl-h);padding:0 12px;border:1px solid var(--line);
+    border-radius:11px;font-size:14px;background:#fff;color:var(--ink);font-family:inherit;
+    transition:border-color .16s ease, box-shadow .16s ease;
+  }
+  input::placeholder{color:#a8b3c3}
+  input:hover,select:hover{border-color:#cfd9e8}
+  input:focus,select:focus{outline:none;border-color:var(--acc);box-shadow:var(--ring)}
+  select{
+    appearance:none;-webkit-appearance:none;cursor:pointer;padding-right:32px;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%236c7a8f' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat:no-repeat;background-position:right 11px center;background-size:11px 11px;
+  }
+  button{cursor:pointer;border:0;border-radius:11px;padding:0 22px;font-size:14px;
+         font-family:inherit;transition:.16s ease;height:var(--ctl-h)}
+  .hint{font-size:12.5px;color:var(--faint)}
+
+  /* ---------- 查询卡片 ---------- */
+  .search-card{padding:0;overflow:hidden}
+  #qf{padding:20px 22px 0}
+
+  /* ---------- 卡片内的分组 ---------- */
+  .group{min-width:0}
+  .group-title{display:flex;align-items:center;gap:7px;margin-bottom:11px;
+               font-size:13px;font-weight:700;color:var(--ink2)}
+  .group-title .tail{font-size:11.5px;font-weight:500;color:var(--faint);letter-spacing:0}
+
+  /* 行程行:城市对作为一个整体,日期独立 */
+  .route-fields{display:grid;grid-template-columns:minmax(0,1fr) minmax(180px,.34fr);
+                align-items:end;gap:14px}
+  .city-pair{display:grid;grid-template-columns:minmax(0,1fr) auto minmax(0,1fr);
+             align-items:end;gap:10px;min-width:0}
+  .swap-btn{
+    width:var(--ctl-h);height:var(--ctl-h);padding:0;flex:none;border-radius:50%;
+    background:#fff;border:1px solid var(--line);color:var(--sub);font-size:15px;
+    display:grid;place-items:center;line-height:1;
+  }
+  .swap-btn:hover{border-color:var(--acc);background:var(--acc-l);color:var(--acc-d);
+                  transform:rotate(180deg)}
+  .swap-btn:active{transform:rotate(180deg) scale(.94)}
+
+  /* 日期快选 */
+  .chips{display:flex;align-items:center;gap:7px;flex-wrap:wrap;margin-top:10px}
+  .chips .lbl{font-size:12px;color:var(--faint);font-weight:500;margin-right:1px}
+  .chip{
+    height:auto;border:1px solid var(--line);background:#fff;color:var(--ink2);
+    border-radius:7px;padding:4px 11px;font-size:12.2px;font-weight:600;font-family:inherit;
+  }
+  .chip:hover{border-color:var(--acc);color:var(--acc-d);background:var(--acc-l)}
+  .chip.on{border-color:var(--acc);color:var(--acc-d);background:var(--acc-l);
+           box-shadow:0 0 0 2.5px rgba(29,111,224,.1)}
+
+  /* 12 栏栅格:字段可跨列,窄屏自动折行 */
+  .fgrid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:13px 16px}
+  .c4{grid-column:span 4}
+  .c6{grid-column:span 6}
+  .search-options{display:grid;grid-template-columns:1fr 1.12fr;margin-top:20px;
+                  padding-top:17px;border-top:1px solid var(--line)}
+  .preference-group{padding-right:22px}
+  .time-group{padding-left:22px;border-left:1px solid var(--line)}
+
+  /* 时段区间:两个 time 输入包在一个控件里,整组居中不拉开 */
+  .range{
+    display:flex;align-items:center;justify-content:center;gap:6px;height:var(--ctl-h);
+    padding:0 8px;background:#fff;border:1px solid var(--line);border-radius:11px;
+    transition:border-color .16s ease, box-shadow .16s ease;
+  }
+  .range:hover{border-color:#cfd9e8}
+  .range:focus-within{border-color:var(--acc);box-shadow:var(--ring)}
+  .range input{width:auto;flex:0 0 auto;min-width:104px;height:auto;border:0;
+               background:transparent;box-shadow:none;padding:0 2px;text-align:center}
+  .range input:hover,.range input:focus{border:0;box-shadow:none}
+  .range .dash{flex:none;color:var(--faint);font-size:12px}
+
+  /* 全渠道比价 */
+  .switch{
+    position:relative;display:flex;align-items:center;gap:11px;cursor:pointer;
+    user-select:none;min-width:260px;flex:1 1 330px;
+  }
+  .switch input{position:absolute;width:0;height:0;margin:0;opacity:0;pointer-events:none}
+  .switch .track{
+    position:relative;flex:none;width:38px;height:22px;margin-top:1px;border-radius:999px;
+    background:#d5deeb;transition:background .18s ease;
+  }
+  .switch .track::after{
+    content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;
+    background:#fff;box-shadow:0 1px 3px rgba(16,30,54,.3);transition:transform .18s ease;
+  }
+  .switch input:checked + .track{background:var(--acc)}
+  .switch input:checked + .track::after{transform:translateX(16px)}
+  .switch input:focus-visible + .track{box-shadow:0 0 0 3.5px rgba(29,111,224,.22)}
+  .switch .txt b{display:block;font-size:13.2px;font-weight:650;color:var(--ink)}
+  .switch .txt em{display:block;font-style:normal;font-size:11.8px;color:var(--sub);margin-top:1px}
+
+  /* 底部操作栏 */
+  .actions{
+    display:flex;align-items:center;gap:16px;flex-wrap:wrap;
+    margin:20px -22px 0;padding:15px 22px;background:#f8fafd;border-top:1px solid var(--line);
+  }
+  #go{
+    padding:0 32px;font-size:14.5px;color:#fff;font-weight:650;
+    background:linear-gradient(180deg,#2b7bee,var(--acc-d));
+    box-shadow:0 8px 20px -8px rgba(29,111,224,.75);
+  }
+  #go:hover:not(:disabled){filter:brightness(1.06);transform:translateY(-1px)}
+  #go:active:not(:disabled){transform:translateY(0)}
+  #go:disabled{opacity:.5;cursor:not-allowed;box-shadow:none}
+  .btn-ghost{
+    padding:0 18px;font-size:13.5px;font-weight:600;background:#fff;
+    border:1px solid var(--line);color:var(--sub);
+  }
+  .btn-ghost:hover{border-color:var(--acc);color:var(--acc-d);background:var(--acc-l)}
+  .action-buttons{display:flex;align-items:center;gap:9px;margin-left:auto}
+  .meta{display:flex;align-items:center;gap:13px;flex-wrap:wrap}
+  .pill{display:inline-flex;align-items:center;gap:5px;font-size:11.8px;color:var(--sub)}
+
+  /* ---------- 运行中 ---------- */
+  #runPanel{padding:16px 20px}
+  #runPanel h2{margin-bottom:6px}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:#cbd2dc;flex:none}
+  .dot.on{background:var(--acc);animation:pulse 1.2s ease-in-out infinite}
+  @keyframes pulse{50%{opacity:.3}}
+  .bar{height:4px;border-radius:99px;background:var(--bg2);overflow:hidden;margin-top:12px}
+  .bar i{display:block;height:100%;width:36%;border-radius:99px;
+         background:linear-gradient(90deg,var(--acc),#5aa2ff);
+         animation:slide 1.5s ease-in-out infinite}
+  @keyframes slide{0%{margin-left:-38%}100%{margin-left:104%}}
+
+  /* ---------- 提示 ---------- */
+  #errBox{display:none;background:var(--bad-l);border:1px solid var(--bad-b);color:var(--bad);
+          border-radius:12px;padding:11px 15px;margin-bottom:16px;white-space:pre-wrap;
+          font-size:13px}
+  .warn{display:flex;gap:8px;background:var(--warn-l);border:1px solid var(--warn-b);
+        color:var(--warn);border-radius:11px;padding:9px 14px;margin:9px 0;font-size:12.8px;
+        line-height:1.5}
+  .warn::before{content:"!";flex:none;font-weight:800;opacity:.6}
+
+  /* ---------- 登录引导 ---------- */
+  #loginGuide{display:none;background:linear-gradient(135deg,#eaf2fe 0%,#f0f7ff 100%);
+              border:1px solid var(--acc);border-radius:14px;padding:18px 20px;margin-bottom:16px;
+              box-shadow:var(--sh2)}
+  #loginGuide h3{font-size:15px;font-weight:700;color:var(--acc-d);margin:0 0 10px;
+                 display:flex;align-items:center;gap:8px}
+  #loginGuide h3::before{content:"🔐";font-size:18px}
+  #loginGuide p{margin:0 0 12px;font-size:13.5px;color:var(--ink2);line-height:1.6}
+  #loginGuide .sites{display:flex;gap:10px;flex-wrap:wrap}
+  #loginGuide .sites button{
+    background:#fff;border:1px solid var(--line);border-radius:9px;padding:8px 16px;
+    font-size:13px;font-weight:600;color:var(--acc-d);cursor:pointer;
+    transition:.16s ease;display:flex;align-items:center;gap:6px;
+  }
+  #loginGuide .sites button:hover{border-color:var(--acc);background:var(--acc-l);transform:translateY(-1px)}
+  #loginGuide .sites button:disabled{opacity:.5;cursor:wait}
+
+  /* ---------- Tab 导航 ---------- */
+  .tabs{display:flex;gap:4px;margin-bottom:12px;border-bottom:2px solid var(--line2)}
+  .tab{
+    padding:6px 16px;border:0;background:transparent;color:var(--sub);
+    font-size:13.5px;font-weight:600;cursor:pointer;border-radius:8px 8px 0 0;
+    transition:.16s ease;position:relative;font-family:inherit;
+  }
+  .tab:hover{background:var(--bg2);color:var(--ink2)}
+  .tab.active{color:var(--acc-d);background:#fff}
+  .tab.active::after{
+    content:"";position:absolute;bottom:-2px;left:0;right:0;height:2px;
+    background:var(--acc);
+  }
+  .tab-content{display:none}
+  .tab-content.active{display:block}
+
+  /* ---------- 快捷入口条 ---------- */
+  .site-bar{
+    display:flex;align-items:center;gap:9px;flex-wrap:wrap;padding:9px 14px;margin-bottom:14px;
+    background:rgba(255,255,255,.78);border:1px solid var(--line);border-radius:14px;
+    box-shadow:0 1px 2px rgba(16,30,54,.03);
+  }
+  .site-bar .label{
+    display:flex;align-items:center;gap:6px;margin-right:2px;
+    font-size:12.4px;font-weight:650;color:var(--sub);
+  }
+  .site-bar .tail{margin-left:auto;font-size:12px;color:var(--faint)}
+  .site-btn{
+    height:30px;background:#fff;border:1px solid var(--line);border-radius:999px;
+    padding:0 14px;font-size:12.6px;font-weight:600;cursor:pointer;
+    transition:.16s ease;display:inline-flex;align-items:center;gap:5px;
+    color:var(--ink2);font-family:inherit;
+  }
+  .site-btn:hover{border-color:var(--acc);background:var(--acc-l);
+                   color:var(--acc-d);transform:translateY(-1px)}
+  .site-btn:disabled{opacity:.5;cursor:wait;transform:none}
+
+  /* ---------- 最低价卡 ---------- */
+  .best{
+    background:linear-gradient(135deg,var(--gold-l) 0%,#fffdf6 100%);
+    border:1px solid var(--gold-b);border-radius:14px;padding:15px 18px;margin:12px 0 14px;
+    box-shadow:0 10px 30px -18px rgba(138,106,18,.5);
+    animation:rise .35s ease both;
+  }
+  .best .lbl{font-size:12px;color:var(--gold);font-weight:650;letter-spacing:.3px;
+             display:flex;align-items:center;gap:6px}
+  .best .main{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-top:7px}
+  .best .flight{font-size:16.5px;font-weight:700}
+  .best .route{font-size:13.5px;color:var(--ink2)}
+  .best .amount{margin-left:auto;display:flex;align-items:baseline;gap:6px}
+  .best .amount b{font-size:27px;color:var(--ok);font-weight:750;letter-spacing:-.5px}
+  .best .amount span{font-size:12.5px;color:var(--sub)}
+  .best .detail{margin-top:9px;display:flex;align-items:center;gap:9px;flex-wrap:wrap;
+                font-size:12.8px;color:var(--ink2)}
+  @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* ---------- 站点头像 / 徽标 ---------- */
+  .q{
+    display:inline-flex;align-items:center;gap:5px;font-size:12.3px;font-weight:600;
+    padding:3px 9px;border-radius:8px;background:var(--bg2);color:var(--ink2);
+    border:1px solid transparent;white-space:nowrap;
+  }
+  .q.win{background:var(--ok-l);color:var(--ok);border-color:var(--ok-b)}
+  .q.click{cursor:pointer}
+  .q.click:hover{border-color:#cfd9e8;background:#fff}
+  .q .mk{font-size:10.5px;opacity:.85}
+  .save{display:inline-flex;align-items:center;font-size:11.8px;font-weight:700;
+        color:var(--ok);background:#fff;border:1px dashed var(--ok-b);
+        border-radius:7px;padding:2px 8px;white-space:nowrap}
+
+  /* ---------- 统计条 ---------- */
+  .stats{display:flex;gap:9px;flex-wrap:wrap;margin:2px 0 12px}
+  .stat{background:var(--bg);border:1px solid var(--line);border-radius:11px;
+        padding:7px 13px;min-width:88px}
+  .stat b{display:block;font-size:16px;font-weight:700;line-height:1.25;
+          font-variant-numeric:tabular-nums}
+  .stat span{font-size:11.5px;color:var(--sub)}
+  .stat.hi{background:var(--ok-l);border-color:var(--ok-b)}
+  .stat.hi b{color:var(--ok)}
+
+  /* ---------- 表格 ---------- */
+  .tablewrap{overflow:auto;max-height:64vh;border:1px solid var(--line);
+             border-radius:13px;background:#fff}
+  table{width:100%;min-width:960px;border-collapse:separate;border-spacing:0;font-size:13.5px}
+  th{
+    padding:9px 12px;text-align:left;font-size:12px;font-weight:650;color:var(--sub);
+    background:#fafcff;border-bottom:1px solid var(--line);position:sticky;top:0;z-index:2;
+    white-space:nowrap;
+  }
+  td{padding:10px 10px;border-bottom:1px solid var(--line2);vertical-align:middle}
+  tbody tr:last-child td{border-bottom:0}
+  tbody tr{transition:background .13s ease}
+  tbody tr:hover{background:#f7faff}
+  tr.top{background:#fffcf0}
+  tr.top:hover{background:#fff8e4}
+  tr.top td:first-child{box-shadow:inset 3px 0 0 #e8c65a}
+  .rk{font-weight:700;color:var(--faint);font-variant-numeric:tabular-nums;width:34px}
+  tr.top .rk{color:var(--gold)}
+  .cell-main{font-weight:600;white-space:nowrap}
+  .cell-sub{font-size:12.2px;color:var(--sub);white-space:nowrap;margin-top:1px}
+  .cell-sub .plus{color:var(--bad);font-weight:700;font-size:11.5px;margin-left:3px}
+  .price{font-weight:750;color:var(--ok);font-size:15px;
+         font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right}
+  .quotes{display:flex;gap:6px;flex-wrap:nowrap;align-items:center;white-space:nowrap}
   .muted{color:var(--sub);font-size:12.5px}
-  #historyList{list-style:none;margin:0;padding:0}
-  #historyList li{border-bottom:1px dashed var(--line);padding:8px 2px;cursor:pointer;
-                  border-radius:6px}
-  #historyList li:hover{background:#f5f8fc}
-  #historyList li .t{font-size:12.8px}
-  #historyList li .m{font-size:12px;color:var(--sub);margin-top:2px}
-  .st{display:inline-block;font-size:11px;padding:1px 7px;border-radius:99px;margin-left:6px}
-  .st.done{background:#e8f6ef;color:var(--acc2)}
-  .st.running,.st.queued{background:#e7f0fb;color:var(--acc)}
-  .st.failed{background:#fdeeed;color:var(--bad)}
-  @media (max-width:960px){.wrap{flex-direction:column}aside{flex:1;position:static;max-height:none}}
+  .empty{padding:34px 10px;text-align:center;color:var(--faint);font-size:13px}
+  .empty .big{font-size:26px;display:block;margin-bottom:8px;opacity:.6}
+
+  /* ---------- 历史 ---------- */
+  #historyList{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+  #historyList li{border-radius:11px;padding:12px 14px;cursor:pointer;
+                  border:1px solid var(--line);transition:.15s ease;background:#fff}
+  #historyList li:hover{background:var(--acc-l);border-color:var(--acc);
+                         box-shadow:0 2px 8px -2px rgba(29,111,224,.25)}
+  #historyList li .t{font-size:13.5px;font-weight:600;color:var(--ink2);
+                     display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  #historyList li .m{font-size:12.5px;color:var(--sub);line-height:1.5}
+  #historyList li .m b{color:var(--ok);font-weight:700}
+  .st{display:inline-block;font-size:10px;font-weight:650;padding:2px 8px;
+      border-radius:99px;margin-left:auto;flex:none}
+  .st.done{background:var(--ok-l);color:var(--ok)}
+  .st.running,.st.queued{background:var(--acc-l);color:var(--acc-d)}
+  .st.failed{background:var(--bad-l);color:var(--bad)}
+  .side-empty{color:var(--faint);font-size:13px;padding:20px;text-align:center;
+              border:1px dashed var(--line);border-radius:10px}
+
+  /* ---------- 响应式 ---------- */
+  @media (max-width:1040px){
+    .wrap{padding:16px}
+    .tablewrap{max-height:none}
+    .site-bar .tail{display:none}
+    .search-options{grid-template-columns:1fr}
+    .preference-group{padding-right:0}
+    .time-group{padding:17px 0 0;margin-top:17px;border-left:0;border-top:1px solid var(--line)}
+  }
+  @media (max-width:940px){
+    .route-fields{grid-template-columns:1fr}
+    .c6{grid-column:span 6}
+    .actions{align-items:flex-start}
+    .action-buttons{width:100%;margin-left:0}
+    .action-buttons #go{margin-left:auto}
+  }
+  @media (max-width:620px){
+    .wrap{padding:10px}
+    .panel{border-radius:13px}
+    #qf{padding:17px 17px 0}
+    .city-pair{grid-template-columns:1fr;gap:10px;position:relative}
+    .r-swap{position:absolute;right:12px;top:50%;width:34px;height:34px;
+            margin-top:-10px;background:#fff;box-shadow:0 3px 10px rgba(16,30,54,.12)}
+    .r-swap:hover{transform:rotate(180deg)}
+    .r-swap:active{transform:rotate(180deg) scale(.94)}
+    .r-swap .swap-ico{display:inline-block;transform:rotate(90deg)}
+    .c4,.c6{grid-column:span 12}
+    .search-options{margin-top:18px;padding-top:15px}
+    .preference-group .fgrid{grid-template-columns:repeat(2,minmax(0,1fr))}
+    .preference-group .c4{grid-column:span 1}
+    .preference-group .c4:last-child{grid-column:span 2}
+    .actions{margin:18px -17px 0;padding:15px 17px;gap:13px}
+    .switch{min-width:0;flex-basis:100%}
+    .meta{gap:10px}
+    .action-buttons{display:grid;grid-template-columns:1fr 1.35fr;gap:9px}
+    #go,.btn-ghost{width:100%;padding:0 12px}
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>✈️ flight-agent · 机票自动比价</h1>
-  <span id="chromeStatus" class="bad">检测 Chrome…</span>
+  <div class="brand">
+    <span class="logo">✈</span>
+    <span>flight-agent</span>
+    <span class="sub">机票自动比价</span>
+  </div>
+  <button id="quitApp" type="button" title="停止本地查询服务(抓取用的 Chrome 会保留,下次启动直接复用)">退出</button>
 </header>
 
 <div class="wrap">
 <main>
-  <section class="panel">
-    <h2>查询条件</h2>
+  <div class="tabs">
+    <button class="tab active" onclick="switchTab('query')">查询</button>
+    <button class="tab" onclick="switchTab('history')">历史查询</button>
+  </div>
+
+  <div id="queryTab" class="tab-content active">
+    <div class="site-bar">
+      <span class="label">🔗 快速打开登录页</span>
+      <button type="button" class="site-btn" onclick="openLogin('ctrip')">🛫 携程</button>
+      <button type="button" class="site-btn" onclick="openLogin('qunar')">✈️ 去哪儿</button>
+      <span class="tail">首次使用请在打开的 Chrome 里登录一次,之后可直接查询</span>
+    </div>
+
+    <section class="panel search-card">
     <form id="qf" autocomplete="off">
-      <div class="grid">
-        <div><label>出发城市</label><input id="dep" list="cityList" placeholder="如: 北京 / BJS"></div>
-        <div><label>到达城市</label><input id="arr" list="cityList" placeholder="如: 上海 / SHA"></div>
-        <div><label>出发日期</label><input id="date" type="date"></div>
-        <div><label>舱位</label>
-          <select id="cabin"><option>经济</option><option>公务</option><option>头等</option></select>
+      <div class="group">
+        <div class="group-title">行程</div>
+        <div class="route-fields">
+          <div class="city-pair">
+            <div class="r-dep"><label for="dep">出发城市</label>
+              <input id="dep" list="cityList" placeholder="如: 北京 / BJS"></div>
+            <button type="button" class="swap-btn r-swap" onclick="swapCities()" title="互换出发和到达城市">
+              <span class="swap-ico" aria-hidden="true">⇄</span><span class="sr-only">互换城市</span>
+            </button>
+            <div class="r-arr"><label for="arr">到达城市</label>
+              <input id="arr" list="cityList" placeholder="如: 上海 / SHA"></div>
+          </div>
+          <div class="r-date"><label for="date">出发日期</label>
+            <input id="date" type="date"></div>
         </div>
-        <div><label>经停</label>
-          <select id="stops">
-            <option value="0">仅直飞</option>
-            <option value="1">允许 1 次中转</option>
-            <option value="2">中转不限(≤2)</option>
-          </select>
+        <div class="chips" id="dateChips">
+          <span class="lbl">快捷日期</span>
+          <button type="button" class="chip" data-days="0">今天</button>
+          <button type="button" class="chip" data-days="1">明天</button>
+          <button type="button" class="chip" data-days="7">一周后</button>
+          <button type="button" class="chip" data-days="30">一个月后</button>
         </div>
-        <div><label>出发不早于</label><input id="depAfter" type="time" value="00:00"></div>
-        <div><label>到达不晚于</label><input id="arrBefore" type="time" value="23:59"></div>
-        <div><label>展示条数</label><input id="top" type="number" min="1" max="100" value="20"></div>
       </div>
+
+      <div class="search-options">
+        <div class="group preference-group">
+          <div class="group-title">偏好 <span class="tail">决定抓取范围</span></div>
+          <div class="fgrid">
+            <div class="c4"><label for="cabin">舱位</label>
+              <select id="cabin"><option>经济</option><option>公务</option><option>头等</option></select>
+            </div>
+            <div class="c4"><label for="stops">经停</label>
+              <select id="stops">
+                <option value="0">仅直飞</option>
+                <option value="1">允许 1 次中转</option>
+                <option value="2">中转不限(≤2)</option>
+              </select>
+            </div>
+            <div class="c4"><label for="top">展示条数</label>
+              <input id="top" type="number" min="1" max="200" value="20"></div>
+          </div>
+        </div>
+
+        <div class="group time-group">
+          <div class="group-title">时段筛选 <span class="tail">默认全天</span></div>
+          <div class="fgrid">
+            <div class="c6"><label for="depAfter">出发时段</label>
+              <div class="range">
+                <input id="depAfter" type="time" value="00:00" aria-label="出发不早于">
+                <span class="dash" aria-hidden="true">—</span>
+                <input id="depBefore" type="time" value="23:59" aria-label="出发不晚于">
+              </div>
+            </div>
+            <div class="c6"><label for="arrBefore">到达不晚于</label>
+              <input id="arrBefore" type="time" value="23:59"></div>
+          </div>
+        </div>
+      </div>
+
       <datalist id="cityList"></datalist>
       <div class="actions">
-        <button id="go" type="submit">开始查询</button>
-        <span class="hint">查询约 30~60 秒(页面渐进渲染+滚动加载),期间请勿关闭调试 Chrome。</span>
+        <label class="switch" for="allSites">
+          <input id="allSites" type="checkbox">
+          <span class="track" aria-hidden="true"></span>
+          <span class="txt">
+            <b>全渠道比价</b>
+            <em>同时抓取携程 + 去哪儿,同一航班合并成一行并列出两站报价(耗时约翻倍)</em>
+          </span>
+        </label>
+        <div class="meta">
+          <span class="pill">⏱ 约 30~60 秒</span>
+          <span class="pill">🪟 期间请勿关闭抓取用的 Chrome</span>
+        </div>
+        <div class="action-buttons">
+          <button id="resetBtn" type="button" class="btn-ghost" title="清除本地记忆的查询条件并恢复默认值">恢复默认</button>
+          <button id="go" type="submit">开始查询</button>
+        </div>
       </div>
     </form>
   </section>
@@ -112,6 +499,7 @@
   <div id="runPanel" class="panel" style="display:none">
     <h2><span class="dot on" id="runDot"></span><span id="runText">查询中…</span></h2>
     <div class="muted" id="runSummary"></div>
+    <div class="bar"><i></i></div>
   </div>
 
   <div id="errBox"></div>
@@ -119,43 +507,70 @@
   <section class="panel" id="resultPanel" style="display:none">
     <h2 id="resTitle">结果</h2>
     <div id="warnBox"></div>
+
     <div class="best" id="bestBox" style="display:none">
-      <div class="lbl">★ 最低价推荐(仅供比价参考 —— 下单/支付请回网站人工确认)</div>
-      <div class="row" id="bestRow"></div>
+      <div class="lbl">★ 最低价推荐 · 仅供比价参考,下单/支付请回网站人工确认</div>
+      <div class="main">
+        <span class="flight" id="bestFlight"></span>
+        <span class="route" id="bestRoute"></span>
+        <span class="amount"><b id="bestPrice"></b><span>起</span></span>
+      </div>
+      <div class="detail" id="bestDetail"></div>
     </div>
+
+    <div class="stats" id="statRow"></div>
     <div class="muted" id="resMeta"></div>
-    <div style="overflow:auto;max-height:62vh">
+
+    <div class="tablewrap">
     <table>
       <thead><tr>
-        <th>#</th><th>航司</th><th>航班号</th><th>起飞机场 → 到达机场</th>
-        <th>出发 → 到达</th><th>经停</th><th>舱位</th><th>价格</th>
+        <th>#</th><th>航班</th><th>起降</th><th>经停</th><th>舱位</th>
+        <th style="text-align:right">最低价</th><th>比价明细</th>
       </tr></thead>
       <tbody id="tbody"></tbody>
     </table>
     </div>
   </section>
-</main>
+</div>
 
-<aside>
-  <h2>历史查询</h2>
-  <ul id="historyList"><li class="muted">暂无记录</li></ul>
-</aside>
+<div id="historyTab" class="tab-content">
+  <section class="panel">
+    <h2>历史查询</h2>
+    <ul id="historyList"><li class="side-empty">暂无记录</li></ul>
+  </section>
+</div>
+
+</main>
 </div>
 
 <script>
 "use strict";
 const $ = s => document.querySelector(s);
+const SITE_NAME = {ctrip:"携程", qunar:"去哪儿", tongcheng:"同程", fliggy:"飞猪"};
 const CITIES = ["北京","上海","广州","深圳","成都","重庆","杭州","西安","武汉","南京","昆明",
  "厦门","长沙","青岛","天津","大连","郑州","沈阳","三亚","海口","乌鲁木齐","哈尔滨","贵阳",
  "南宁","福州","济南","太原","兰州","长春","合肥","石家庄","南昌","呼和浩特","银川","西宁","拉萨"];
 
-function fmtDate(d){ return d.toISOString().slice(0,10); }
+function siteName(s){ return SITE_NAME[s] || s || "未知渠道"; }
+/* 按本地时区拼日期:早于 08:00 时 toISOString() 会退到前一天,所以不能用它 */
+function fmtDate(d){
+  const p = n => String(n).padStart(2,"0");
+  return `${d.getFullYear()}-${p(d.getMonth()+1)}-${p(d.getDate())}`;
+}
 function plusDays(n){ const d=new Date(); d.setDate(d.getDate()+n); return fmtDate(d); }
-function esc(){ /* 一律用 textContent,不拼 HTML */ }
+function money(n){ return Number(n).toLocaleString("zh-CN"); }
+function el(tag, cls, text){
+  const n = document.createElement(tag);
+  if(cls) n.className = cls;
+  if(text != null) n.textContent = text;
+  return n;
+}
+/* 元素可能被改版删掉,统一走这里绑定:少一个按钮也不该让整页初始化中断 */
+function bind(sel, ev, fn){ const n=$(sel); if(n) n.addEventListener(ev, fn); }
 
-async function api(path, opts){
+async function api(path, opts, timeoutMs){
   const ctl = new AbortController();
-  const timer = setTimeout(()=>ctl.abort(), 10000);   // 任何请求最多等 10s,绝不无限卡
+  const timer = setTimeout(()=>ctl.abort(), timeoutMs||10000);
   try {
     const r = await fetch(path, {...(opts||{}), signal: ctl.signal});
     const j = await r.json().catch(()=>({error:"响应解析失败"}));
@@ -168,36 +583,69 @@ async function api(path, opts){
 }
 
 // ---------- 表单 ----------
+/* select 的 value 不存在时会变成空串,这里统一做兜底 */
+function setSelect(sel, value, fallback){
+  const n=$(sel); if(!n) return;
+  const want=String(value==null?"":value);
+  n.value = [...n.options].some(o=>o.value===want) ? want : fallback;
+}
 function fillDefault(){
   const saved = JSON.parse(localStorage.getItem("fa-form")||"null");
   if(saved){
     $("#dep").value=saved.dep||""; $("#arr").value=saved.arr||"";
-    $("#date").value=saved.date||plusDays(7); $("#cabin").value=saved.cabin||"经济";
-    $("#stops").value=(saved.stops??0).toString(); $("#top").value=saved.top||20;
-    $("#depAfter").value=saved.depAfter||"00:00"; $("#arrBefore").value=saved.arrBefore||"23:59";
+    $("#date").value=saved.date||plusDays(7);
+    setSelect("#cabin", saved.cabin, "经济");
+    // 这里读的键必须和 collectForm() 写的一致(collectForm 直接用后端字段名)。
+    // 之前一边写 max_stops/dep_after、一边读 stops/depAfter,导致经停和时刻窗
+    // 永远恢复不成用户上次的设置。保留旧键名兜底,兼容浏览器里已有的旧存档。
+    setSelect("#stops", saved.max_stops ?? saved.stops ?? 0, "0");
+    $("#top").value=saved.top||20;
+    $("#depAfter").value=saved.dep_after || saved.depAfter || "00:00";
+    $("#depBefore").value=saved.dep_before || saved.depBefore || "23:59";
+    $("#arrBefore").value=saved.arr_before || saved.arrBefore || "23:59";
+    $("#allSites").checked=!!saved.all_sites;
   } else {
     $("#dep").value="北京"; $("#arr").value="上海";
-    $("#date").value=plusDays(7); $("#stops").value="0"; $("#top").value=20;
+    $("#date").value=plusDays(7); setSelect("#stops",0,"0"); $("#top").value=20;
+    $("#allSites").checked=false;
   }
+  syncDateChips();
 }
 function collectForm(){
   const f = {
     dep:$("#dep").value.trim(), arr:$("#arr").value.trim(), date:$("#date").value,
     cabin:$("#cabin").value, max_stops:Number($("#stops").value),
-    dep_after:$("#depAfter").value||"00:00", arr_before:$("#arrBefore").value||"23:59",
-    top:Number($("#top").value)||20
+    dep_after:$("#depAfter").value||"00:00", dep_before:$("#depBefore").value||"23:59",
+    arr_before:$("#arrBefore").value||"23:59",
+    top:Number($("#top").value)||20,
+    all_sites:!!($("#allSites")&&$("#allSites").checked)
   };
   localStorage.setItem("fa-form", JSON.stringify(f));
   return f;
 }
+function saveForm(){ collectForm(); }   // 只记不提交
+
+/* 快捷日期:点了就写进 #date,并高亮当前命中的那一个 */
+function setQuickDate(days){
+  const d=new Date(); d.setDate(d.getDate()+Number(days)||0);
+  $("#date").value=fmtDate(d);
+  syncDateChips(); saveForm();
+}
+function syncDateChips(){
+  const cur=$("#date").value;
+  document.querySelectorAll("#dateChips .chip").forEach(b=>{
+    const d=new Date(); d.setDate(d.getDate()+(Number(b.dataset.days)||0));
+    b.classList.toggle("on", fmtDate(d)===cur);
+  });
+}
+function resetForm(){
+  localStorage.removeItem("fa-form");
+  fillDefault();
+  showErr("");
+}
 
 // ---------- 状态 ----------
-function setChrome(ok, detail){
-  const el=$("#chromeStatus");
-  el.className = ok?"ok":"bad";
-  el.textContent = ok ? ("Chrome 已连接 · "+(detail||"").split(" ")[0]) : "Chrome 未连接";
-  el.title = ok ? (detail||"") : "请运行: bash scripts/open_chrome_debug.sh 并保持 Chrome 打开";
-}
+function setChrome(ok, detail){}  // 不再需要，保留空函数避免错误
 function showErr(msg){ const b=$("#errBox"); b.style.display=msg?"block":"none"; b.textContent=msg; }
 function showRun(on, summary){
   $("#runPanel").style.display=on?"block":"none";
@@ -216,51 +664,145 @@ function stopLabel(f){
   return f.stop_info || (f.stops>0?("中转"+f.stops):"");
 }
 
+// ---------- 比价明细 ----------
+function pricedQuotes(f){
+  return (f.quotes||[]).filter(q=>q.price!=null)
+                      .sort((a,b)=>a.price-b.price || String(a.site).localeCompare(String(b.site)));
+}
+/* 老存档里没有 spread 字段,所以本地再算一遍兜底 */
+function spreadOf(f){
+  const qs = pricedQuotes(f);
+  if(qs.length<2) return Number(f.spread)||0;
+  return qs[qs.length-1].price - qs[0].price;
+}
+/* 适配器拿不到舱位时会填“经济舱(默认)”,展示时去掉这个内部标记 */
+function cabinLabel(f){
+  const c = f.cabin||"—";
+  return c.replace(/\(默认\)$/, "").trim() || "—";
+}
+function quoteTags(f){
+  const box = el("div","quotes");
+  const qs = pricedQuotes(f);
+  if(!qs.length){
+    box.appendChild(el("span","q", f.site? siteName(f.site) : "—"));
+    return box;
+  }
+  qs.forEach((q,i)=>{
+    const tag = el("span","q"+(i===0?" win":""));
+    tag.appendChild(el("span",null,siteName(q.site)));
+    tag.appendChild(el("span","num", "¥"+money(q.price)));
+    if(i===0 && qs.length>1) tag.appendChild(el("span","mk","✓最低"));
+    if(q.url){
+      tag.classList.add("click");
+      tag.title = "在"+siteName(q.site)+"打开结果页复核";
+      tag.onclick = ()=>window.open(q.url,"_blank","noopener");
+    }
+    box.appendChild(tag);
+  });
+  const spread = spreadOf(f);
+  if(spread>0) box.appendChild(el("span","save","省 ¥"+money(spread)));
+  return box;
+}
+
 // ---------- 渲染结果 ----------
 function renderResult(task){
+  const rec = task.result.recommendation, sites = task.result.sites || [];
   $("#resultPanel").style.display="block";
-  $("#resTitle").textContent="查询结果 · "+task.query_summary;
-  const rec = task.result.recommendation, sites = task.result.sites;
+  $("#resTitle").textContent = "查询结果";
+  $("#resTitle").appendChild(el("span","tag", task.query_summary));
+
   const ws = warnTexts(task);
-  $("#warnBox").innerHTML="";
-  ws.slice(0,8).forEach(w=>{
-    const d=document.createElement("div"); d.className="warn"; d.textContent="[!] "+w;
-    $("#warnBox").appendChild(d);
-  });
+  const warnBox = $("#warnBox"); warnBox.textContent="";
+  ws.slice(0,8).forEach(w=>warnBox.appendChild(el("div","warn",w)));
 
   const best = rec.best;
   const bb=$("#bestBox");
   if(best && best.price!=null){
     bb.style.display="block";
-    const r=$("#bestRow"); r.textContent="";
-    r.textContent=`${best.airline||""} ${best.flight_no}  ${best.dep_airport}→${best.arr_airport}  `+
-      `${best.dep_time||"--:--"}→${best.arr_time||"--:--"}${best.arr_day_offset?"(+1天)":""}  `+
-      `¥${best.price.toLocaleString("zh-CN")} 起`;
+    $("#bestFlight").textContent = `${best.airline||""} ${best.flight_no}`.trim();
+    const day = best.arr_day_offset? "(+1天)" : "";
+    $("#bestRoute").textContent =
+      `${best.dep_airport||"?"} → ${best.arr_airport||"?"}  ` +
+      `${best.dep_time||"--:--"} → ${best.arr_time||"--:--"}${day}`;
+    $("#bestPrice").textContent = "¥"+money(best.price);
+    const detail = $("#bestDetail"); detail.textContent="";
+    const bq = pricedQuotes(best);
+    bq.forEach((q,i)=>{
+      const tag = el("span","q"+(i===0?" win":""));
+      tag.appendChild(el("span",null,siteName(q.site)));
+      tag.appendChild(el("span","num","¥"+money(q.price)));
+      if(i===0 && bq.length>1) tag.appendChild(el("span","mk","✓最低"));
+      if(q.url){
+        tag.classList.add("click");
+        tag.title = "在"+siteName(q.site)+"打开结果页复核";
+        tag.onclick = ()=>window.open(q.url,"_blank","noopener");
+      }
+      detail.appendChild(tag);
+    });
+    const bestSpread = spreadOf(best);
+    if(bestSpread>0){
+      const dearest = bq[bq.length-1];
+      detail.appendChild(el("span","save",
+        `比${siteName(dearest.site)}便宜 ¥${money(bestSpread)}`));
+    }
   } else bb.style.display="none";
 
   const ranked = rec.ranked||[];
   const priced = ranked.filter(f=>f.price!=null).length;
-  $("#resMeta").textContent=
-    `共 ${ranked.length} 条符合约束,按价格升序(有价 ${priced} 条)`+
-    (rec.dropped_no_price?` · 无价 ${rec.dropped_no_price} 条`:"")+
-    (sites.length?` · 数据源: ${sites.map(s=>s.site+" "+s.flights.length+"条").join(", ")}`:"");
-  const tb=$("#tbody"); tb.innerHTML="";
+  const multi  = ranked.filter(f=>pricedQuotes(f).length>1).length;
+  const savings = ranked.map(f=>spreadOf(f)).filter(x=>x>0);
+  const stats = $("#statRow"); stats.textContent="";
+  const chip = (v,l,hi)=>{ const c=el("div","stat"+(hi?" hi":"")); c.appendChild(el("b",null,v));
+                           c.appendChild(el("span",null,l)); stats.appendChild(c); };
+  chip(ranked.length, "符合约束");
+  chip(priced, "有价格");
+  chip(sites.length, "数据源");
+  chip(multi, "多站可比");
+  if(priced){
+    chip("¥"+money(ranked.find(f=>f.price!=null).price), "最低价", true);
+    if(savings.length) chip("¥"+money(Math.max(...savings)), "最大差价", true);
+  }
+
+  $("#resMeta").textContent = sites.length
+    ? "数据源:" + sites.map(s=>`${siteName(s.site)} ${s.flights.length} 条`).join(" · ")
+      + (rec.dropped_no_price?` · 另有 ${rec.dropped_no_price} 条无价`:"")
+    : "";
+
+  const tb=$("#tbody"); tb.textContent="";
   ranked.forEach((f,i)=>{
-    const tr=document.createElement("tr");
+    const tr=el("tr");
     if(i===0 && f.price!=null) tr.className="top";
-    const td=(cls)=>{ const c=document.createElement("td"); if(cls) c.className=cls; tr.appendChild(c); return c; };
-    td().textContent=(i+1);
-    td().textContent=f.airline||"—";
-    td().textContent=f.flight_no||"—";
-    td().textContent=`${f.dep_airport||"?"} → ${f.arr_airport||"?"}`;
-    const t=td(); t.textContent=`${f.dep_time||"--:--"} → ${f.arr_time||"--:--"}`;
-    if(f.arr_day_offset){ const s=document.createElement("span"); s.className="day1"; s.textContent="+1天"; t.appendChild(s); }
-    td("stops").textContent=stopLabel(f);
-    td().textContent=f.cabin||"—";
-    const p=td("price num");
-    p.textContent = f.price!=null ? "¥"+f.price.toLocaleString("zh-CN") : "无价";
+    tr.appendChild(el("td","rk",i+1));
+
+    const cFlight=el("td");
+    cFlight.appendChild(el("div","cell-main",`${f.flight_no||"—"}`));
+    cFlight.appendChild(el("div","cell-sub",f.airline||"—"));
+    tr.appendChild(cFlight);
+
+    const cRoute=el("td");
+    cRoute.appendChild(el("div","cell-main",`${f.dep_airport||"?"} → ${f.arr_airport||"?"}`));
+    const sub=el("div","cell-sub",`${f.dep_time||"--:--"} → ${f.arr_time||"--:--"}`);
+    if(f.arr_day_offset) sub.appendChild(el("span","plus","+1天"));
+    cRoute.appendChild(sub);
+    tr.appendChild(cRoute);
+
+    tr.appendChild(el("td","cell-sub",stopLabel(f)));
+    tr.appendChild(el("td","cell-sub",cabinLabel(f)));
+    tr.appendChild(el("td","price", f.price!=null? "¥"+money(f.price) : "无价"));
+    const cQuote=el("td");
+    cQuote.appendChild(quoteTags(f));
+    tr.appendChild(cQuote);
     tb.appendChild(tr);
   });
+
+  if(!ranked.length){
+    const tr=el("tr");
+    const td=el("td"); td.colSpan=7;
+    const box=el("div","empty");
+    box.appendChild(el("span","big","🔍"));
+    box.appendChild(el("div",null,"没有符合条件的航班,试着放宽时刻/经停/舱位条件"));
+    td.appendChild(box); tr.appendChild(td); tb.appendChild(tr);
+  }
   window.scrollTo({top:0,behavior:"smooth"});
 }
 
@@ -282,38 +824,41 @@ function poll(tid){
   pollTimer=setTimeout(async ()=>{
     const t=await api("/api/task/"+encodeURIComponent(tid));
     if(t.error){ showErr("查询任务出错: "+t.error); showRun(false); return; }
-    if(t.state==="queued"||t.state==="running"){ $("#runText").textContent=
-        t.state==="queued"?"排队等待…":"抓取比价中(约 30~60 秒)…"; poll(tid); return; }
+    if(t.state==="queued"||t.state==="running"){
+      $("#runText").textContent = t.state==="queued"?"排队等待…":"抓取比价中(约 30~60 秒)…";
+      poll(tid); return;
+    }
     clearTimeout(pollTimer);
     showRun(false);
-    if(t.state==="done" && t.result){
-      renderResult(t); loadHistory();
-    } else {
-      showErr("查询失败:\n"+(t.error||"未知错误"));
-    }
+    if(t.state==="done" && t.result){ renderResult(t); loadHistory(); }
+    else { showErr("查询失败:\n"+(t.error||"未知错误")); }
   },1500);
 }
 
 // ---------- 历史 ----------
 async function loadHistory(){
   const h=await api("/api/history");
-  const ul=$("#historyList"); ul.innerHTML="";
+  const ul=$("#historyList"); ul.textContent="";
   const tasks=h.tasks||[];
-  if(!tasks.length){ const li=document.createElement("li"); li.className="muted"; li.textContent="暂无记录"; ul.appendChild(li); return; }
+  if(!tasks.length){ ul.appendChild(el("li","side-empty","暂无记录")); return; }
   tasks.forEach(t=>{
-    const li=document.createElement("li");
+    const li=el("li");
     li.title="点击查看结果";
     li.onclick=()=>viewTask(t.id);
-    const row=document.createElement("div"); row.className="t";
-    row.textContent=t.query_summary;
-    const st=document.createElement("span"); st.className="st "+t.state;
-    st.textContent={queued:"排队",running:"进行中",done:"完成",failed:"失败"}[t.state]||t.state;
-    row.appendChild(st);
-    const m=document.createElement("div"); m.className="m";
+    const row=el("div","t");
+    row.appendChild(el("span",null,t.query_summary||""));
+    row.appendChild(el("span","st "+t.state,
+      {queued:"排队",running:"进行中",done:"完成",failed:"失败"}[t.state]||t.state));
+    const m=el("div","m");
     if(t.state==="done" && t.summary){
-      m.textContent=(t.summary.best_flight?("最低 "+(t.summary.best_flight||"")+
-        (t.summary.best_price!=null?" ¥"+t.summary.best_price:"")+" · ":"")+
-        "符合 "+t.summary.total+" 条")+(t.created?" · "+t.created.slice(11,16):"");
+      if(t.summary.best_flight){
+        m.appendChild(el("span",null,"最低 "));
+        m.appendChild(el("b",null,t.summary.best_flight));
+        if(t.summary.best_price!=null) m.appendChild(el("b",null," ¥"+money(t.summary.best_price)));
+        m.appendChild(el("span",null," · "));
+      }
+      m.appendChild(el("span",null,"符合 "+t.summary.total+" 条"));
+      if(t.created) m.appendChild(el("span",null," · "+t.created.slice(11,16)));
     } else if(t.state==="failed"){ m.textContent=(t.error||"").slice(0,60); }
     else { m.textContent=t.created?t.created.slice(5,16):""; }
     li.appendChild(row); li.appendChild(m);
@@ -330,31 +875,86 @@ async function viewTask(tid){
 
 // ---------- 启动(不依赖网络即可操作:按钮先挂监听,再异步刷新周边信息) ----------
 function init(){
-  $("#qf").addEventListener("submit", submitQuery);
+  // 每个监听都单独兜底:某个元素被改版删掉时,只丢它自己的功能,不再整页卡死在初始化。
+  bind("#qf", "submit", submitQuery);
+  bind("#resetBtn", "click", resetForm);
+  bind("#quitApp", "click", quitApp);
+  bind("#date", "change", ()=>{ syncDateChips(); saveForm(); });
+  document.querySelectorAll("#dateChips .chip").forEach(b=>{
+    b.addEventListener("click", ()=>setQuickDate(b.dataset.days));
+  });
   fillDefault();
   loadCities();
   refreshHealth();
   loadHistory();
   setInterval(refreshHealth, 30000);
 }
+async function quitApp(){
+  if(!confirm("退出 flight-agent 本地服务?\n\n(抓取用的 Chrome 会保留,下次启动直接复用)")) return;
+  const btn=$("#quitApp"); btn.disabled=true; btn.textContent="退出中…";
+  await api("/api/shutdown",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"},5000);
+  clearTimeout(pollTimer);
+  document.body.textContent="";
+  const box=el("div");
+  box.style.cssText="font:14px/1.7 -apple-system,'PingFang SC',sans-serif;padding:80px 20px;"+
+                    "text-align:center;color:#6c7a8f";
+  const h=el("h2","", "已退出 flight-agent");
+  h.style.cssText="color:#16202e;font-size:20px;margin-bottom:10px";
+  box.appendChild(h);
+  box.appendChild(el("p",null,"本地查询服务已停止,可以直接关闭这个窗口。"));
+  const tip=el("p",null,"下次双击 App 图标即可重新启动。");
+  tip.style.color="#93a0b3"; tip.style.fontSize="13px";
+  box.appendChild(tip);
+  document.body.appendChild(box);
+}
 async function loadCities(){
   const c = await api("/api/cities");
   if(c.error || !c.cities) return;
-  $("#cityList").innerHTML="";
-  c.cities.forEach(x=>{ const o=document.createElement("option"); o.value=x; $("#cityList").appendChild(o); });
+  const list=$("#cityList"); list.textContent="";
+  c.cities.forEach(x=>{ const o=document.createElement("option"); o.value=x; list.appendChild(o); });
+}
+async function openLogin(site){
+  const btns = document.querySelectorAll(".site-btn");
+  btns.forEach(b=>b.disabled=true);
+  const r = await api("/api/open-login", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({site})
+  });
+  btns.forEach(b=>b.disabled=false);
+  if(r.error){
+    showErr("打开登录页失败: "+r.error);
+  } else {
+    showErr("");
+    alert(`已在 Chrome 中打开 ${SITE_NAME[site]||site} 登录页。\n\n请在该页面完成登录，然后返回此处开始查询。`);
+  }
+}
+
+function switchTab(tabName){
+  // 切换 tab 按钮状态
+  document.querySelectorAll(".tab").forEach(t=>t.classList.remove("active"));
+  document.querySelectorAll(".tab-content").forEach(t=>t.classList.remove("active"));
+
+  // 激活对应的 tab
+  const tabs = document.querySelectorAll(".tab");
+  if(tabName === "query"){
+    tabs[0].classList.add("active");
+    $("#queryTab").classList.add("active");
+  } else if(tabName === "history"){
+    tabs[1].classList.add("active");
+    $("#historyTab").classList.add("active");
+    loadHistory(); // 切换到历史时刷新
+  }
+}
+
+function swapCities(){
+  const dep = $("#dep").value;
+  const arr = $("#arr").value;
+  $("#dep").value = arr;
+  $("#arr").value = dep;
 }
 async function refreshHealth(){
-  const h = await api("/api/health");
-  if(h.error){
-    const el=$("#chromeStatus"); el.className="bad"; el.textContent="服务未响应";
-    el.title="请确认网页版服务还在运行(uv run python -m flight_agent.webapp.server)";
-    return;
-  }
-  setChrome(!!h.chrome, h.chrome_detail||"");
-  if(!h.chrome){
-    const cur=($("#errBox").textContent||"");
-    if(h.hint && (cur==="" || /Chrome|请先运行/.test(cur))) showErr("⚠ "+h.hint);
-  }
+  await api("/api/health");
 }
 init();
 </script>

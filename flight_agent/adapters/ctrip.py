@@ -22,11 +22,17 @@ import logging
 import re
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
-from playwright.sync_api import Page
+if TYPE_CHECKING:
+    from playwright.sync_api import Page
 
-from flight_agent.adapters.base import SiteAdapter, clean_price, guess_flight_no
+from flight_agent.adapters.base import (
+    SiteAdapter,
+    clean_price,
+    guess_flight_no,
+    load_until_stable,
+)
 from flight_agent.models import Flight, SearchQuery, SiteResult
 
 log = logging.getLogger("flight-agent.ctrip")
@@ -71,7 +77,7 @@ CLOSE_SELECTORS = [
 _NO_RESULT_HINTS = ["没有找到", "无航班", "暂无航班", "抱歉", "无结果"]
 
 _HHMM_RE = re.compile(r"(?<!\d)\d{1,2}:\d{2}(?!\d)")
-_FLIGHT_NO_RE = re.compile(r"([A-Z]{2}\d{3,4})")
+_FLIGHT_NO_RE = re.compile(r"((?:[A-Z]{2}|[A-Z]\d|\d[A-Z])\d{3,4})")
 _AIRLINE_PREFIX = {  # 航班号前缀 → 航司名(兜底;卡内通常有中文名/logo alt)
     "CA": "中国国航", "MU": "东方航空", "CZ": "南方航空", "HU": "海南航空",
     "3U": "四川航空", "MF": "厦门航空", "ZH": "深圳航空", "SC": "山东航空",
@@ -237,6 +243,7 @@ class CtripAdapter(SiteAdapter):
         try:
             page.goto(url, wait_until="domcontentloaded", timeout=settings.page_timeout_ms)
             page.wait_for_timeout(800)
+            self._focus(page)
             self._dismiss_popups(page)
 
             cards = self._wait_cards(page, settings)
@@ -347,24 +354,28 @@ class CtripAdapter(SiteAdapter):
         return []
 
     # ------------------------------------------------------------------ #
-    def _scroll_list_to_load(self, page: Page, settings) -> None:
-        """滚动懒加载:把列表滚到底,直到卡片数稳定或轮次用尽(尽力而为)。"""
+    def _scroll_list_to_load(self, page: Page, settings) -> int:
+        """滚动懒加载:反复“滚到底 → 等新卡片”,直到连续多轮不再增长或超时。
+
+        判定逻辑见 adapters.base.load_until_stable 的说明(单轮平台期会导致漏抓)。
+        """
         loc = page.locator(_css(CARD_SCOPED_SELECTORS))
-        prev = -1
-        for _ in range(settings.scroll_rounds):
-            try:
-                if loc.count():
-                    loc.first.evaluate(_SCROLL_LIST_JS)
-            except Exception:  # noqa: BLE001
-                pass
-            page.wait_for_timeout(settings.scroll_settle_ms)
-            try:
-                n = loc.count()
-            except Exception:  # noqa: BLE001
-                n = 0
-            if n == prev:
-                break
-            prev = n
+
+        def count() -> int:
+            return loc.count()
+
+        def step() -> None:
+            if loc.count():
+                loc.first.evaluate(_SCROLL_LIST_JS)
+
+        return load_until_stable(
+            page,
+            count,
+            step,
+            settle_ms=settings.scroll_settle_ms,
+            timeout_ms=settings.load_timeout_ms,
+            stable_rounds=settings.load_stable_rounds,
+        )
 
     # ------------------------------------------------------------------ #
     # —— 单卡节点化抽取 ——

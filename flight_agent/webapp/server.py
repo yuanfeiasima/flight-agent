@@ -15,29 +15,37 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import threading
 import time
 import urllib.request
 import webbrowser
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from flight_agent import __version__
-from flight_agent.adapters import ADAPTERS
 from flight_agent.browser import BrowserSession
-from flight_agent.city_codes import CITY_CODES, resolve_code
-from flight_agent.config import Settings
+from flight_agent.city_codes import CITY_CODES
+from flight_agent.config import LLMSettings, Settings
 from flight_agent.engine.compare import recommend
+from flight_agent.engine.search import search_sites
+from flight_agent.llm import FlightQueryLLM, LLMError, with_overrides
 from flight_agent.models import SearchQuery
+from flight_agent.query import make_search_query, query_to_dict
 
 STATIC_DIR = Path(__file__).parent / "static"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8712
-_HHMM_RE = re.compile(r"^\d{1,2}:\d{2}$")
+
+# 各网站的登录页 URL（用于引导用户登录）
+LOGIN_URLS = {
+    "ctrip": "https://flights.ctrip.com",
+    "qunar": "https://flight.qunar.com",
+    "tongcheng": "https://www.ly.com/flights/home",
+    "fliggy": "https://www.fliggy.com",
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -47,60 +55,8 @@ def _now_stamp() -> str:
 
 
 def _make_query(d: dict) -> SearchQuery:
-    """校验并构造一次查询。失败抛 ValueError(带中文原因)。"""
-    dep = (d.get("dep") or "").strip()
-    arr = (d.get("arr") or "").strip()
-    if not dep or not arr:
-        raise ValueError("请填写出发城市与到达城市(中文或三位 IATA 码)。")
-    dep_code = resolve_code(dep)
-    arr_code = resolve_code(arr)
-    if dep_code == arr_code:
-        raise ValueError("出发与到达城市不能相同。")
-
-    day_str = (d.get("date") or "").strip()
-    if not day_str:
-        day_str = (date.today() + timedelta(days=7)).isoformat()
-    try:
-        dep_date = date.fromisoformat(day_str)
-    except ValueError:
-        raise ValueError(f"日期格式应为 YYYY-MM-DD,收到: {day_str!r}")
-    if dep_date < date.today():
-        raise ValueError("出发日期不能早于今天。")
-
-    def _h(key: str, fallback: str) -> str:
-        v = (d.get(key) or "").strip() or fallback
-        if not _HHMM_RE.match(v):
-            raise ValueError(f"时刻 {key}={v!r} 应为 HH:MM 格式。")
-        h, m = (int(x) for x in v.split(":"))
-        if h > 23 or m > 59:
-            raise ValueError(f"时刻 {key}={v!r} 不合法。")
-        return f"{h:02d}:{m:02d}"
-
-    raw_stops = d.get("max_stops")
-    if raw_stops in (None, ""):
-        max_stops = 0
-    else:
-        try:
-            max_stops = int(raw_stops)
-        except (TypeError, ValueError):
-            raise ValueError("经停上限必须是整数。")
-        if max_stops < 0:
-            raise ValueError("经停上限不能为负数。")
-
-    cabin = (d.get("cabin") or "经济").strip()
-    if not cabin:
-        raise ValueError("请选择舱位。")
-    return SearchQuery(
-        dep_city=dep,
-        arr_city=arr,
-        dep_code=dep_code,
-        arr_code=arr_code,
-        dep_date=dep_date,
-        max_stops=max_stops,
-        cabin_keyword=cabin,
-        dep_after=_h("dep_after", "00:00"),
-        arr_before=_h("arr_before", "23:59"),
-    )
+    """兼容旧调用点，实际校验集中在 query 模块。"""
+    return make_search_query(d)
 
 
 def _parse_top(d: dict, settings: Settings) -> int:
@@ -111,12 +67,23 @@ def _parse_top(d: dict, settings: Settings) -> int:
     return max(1, min(top, 200))
 
 
+def _window_text(q: SearchQuery) -> str:
+    """时刻约束的人话描述(全天就不啰嗦)。"""
+    parts: list[str] = []
+    if q.dep_after != "00:00" or q.dep_before != "23:59":
+        parts.append(f"出发 {q.dep_after}-{q.dep_before}")
+    if q.arr_before != "23:59":
+        parts.append(f"到达≤{q.arr_before}")
+    return " ".join(parts) if parts else "全天"
+
+
 # --------------------------------------------------------------------------- #
 class TaskManager:
     """后台单线程查询队列。task = {id, state, created, query, summary|result|error}。"""
 
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, llm_settings: LLMSettings | None = None):
         self.settings = settings
+        self.llm_settings = llm_settings or LLMSettings()
         self._lock = threading.Lock()
         self._tasks: dict[str, dict] = {}
         self._queue: list[str] = []
@@ -128,6 +95,7 @@ class TaskManager:
     def enqueue(self, payload: dict) -> dict:
         q = _make_query(payload)  # 校验失败抛 ValueError
         top = _parse_top(payload, self.settings)
+        all_sites = bool(payload.get("all_sites"))
         with self._lock:
             self._seq += 1
             tid = f"{_now_stamp()}-{self._seq:02d}"
@@ -137,10 +105,11 @@ class TaskManager:
                 "created": datetime.now().isoformat(timespec="seconds"),
                 "query": payload,
                 "top_n": top,
+                "all_sites": all_sites,
                 "query_summary": (
                     f"{q.dep_city} → {q.arr_city}  {q.dep_date_str}  "
-                    f"(直飞≤{q.max_stops} | {q.cabin_keyword}舱 | "
-                    f"{q.dep_after}~{q.arr_before})"
+                    f"(直飞≤{q.max_stops} | {q.cabin_keyword}舱 | {_window_text(q)})"
+                    + ("  [全渠道比价]" if all_sites else "")
                 ),
                 "result": None,
                 "error": None,
@@ -173,6 +142,9 @@ class TaskManager:
                 for t in items[:n]
             ]
 
+    def parse_text(self, text: str) -> dict:
+        return query_to_dict(FlightQueryLLM(self.llm_settings).parse(text))
+
     # ---------------- 内部 ---------------- #
     def _start_worker(self) -> None:
         with self._lock:
@@ -201,7 +173,12 @@ class TaskManager:
     def _execute(self, tid: str) -> None:
         task = self._tasks[tid]
         q = _make_query(task["query"])
-        settings = replace(self.settings, top_n=task.get("top_n") or self.settings.top_n)
+        settings = replace(
+            self.settings,
+            top_n=task.get("top_n") or self.settings.top_n,
+            # 勾了“全渠道比价”就抓完全部渠道再合并去重,否则维持“成功即停”的回退模式
+            stop_after_first_success=not task.get("all_sites"),
+        )
         try:
             result = self._run(q, settings)
             payload = {
@@ -214,6 +191,7 @@ class TaskManager:
                     "max_stops": q.max_stops,
                     "cabin_keyword": q.cabin_keyword,
                     "dep_after": q.dep_after,
+                    "dep_before": q.dep_before,
                     "arr_before": q.arr_before,
                 },
                 "sites": [r.to_dict() for r in result["site_results"]],
@@ -251,9 +229,7 @@ class TaskManager:
     def _run(self, q: SearchQuery, settings: Settings) -> dict:
         site_results = []
         with BrowserSession.connect(settings.cdp_host, settings.cdp_port) as session:
-            for site in settings.sites:
-                adapter_cls = ADAPTERS[site]
-                site_results.append(adapter_cls().search(session, q, settings))
+            site_results = search_sites(session, q, settings)
         rec = recommend(site_results, q)
         return {"site_results": site_results, "rec": rec}
 
@@ -290,6 +266,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"tasks": self.manager.recent(15)})
         if path == "/api/cities":
             return self._json(200, {"cities": sorted(CITY_CODES)})
+        if path == "/api/login-urls":
+            return self._json(200, {"urls": LOGIN_URLS})
         if path.startswith("/api/task/"):
             tid = path.rsplit("/", 1)[-1]
             t = self.manager.get(tid)
@@ -311,7 +289,47 @@ class Handler(BaseHTTPRequestHandler):
             except json.JSONDecodeError:
                 return self._json(400, {"error": "请求体不是合法 JSON"})
             return self._json(200, resp)
+        if path == "/api/parse":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8") or "{}")
+                return self._json(200, {"query": self.manager.parse_text(payload.get("text", ""))})
+            except (ValueError, LLMError) as exc:
+                return self._json(400, {"error": str(exc)})
+            except json.JSONDecodeError:
+                return self._json(400, {"error": "请求体不是合法 JSON"})
+        if path == "/api/open-login":
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b"{}"
+                payload = json.loads(raw.decode("utf-8") or "{}")
+                site = payload.get("site", "")
+                if site not in LOGIN_URLS:
+                    return self._json(400, {"error": f"不支持的网站: {site}"})
+                # 在已连接的 Chrome 中打开登录页
+                try:
+                    with BrowserSession.connect(self.settings.cdp_host, self.settings.cdp_port) as session:
+                        page = session.new_page()
+                        page.goto(LOGIN_URLS[site], wait_until="domcontentloaded", timeout=15000)
+                        page.bring_to_front()
+                    return self._json(200, {"ok": True, "site": site, "url": LOGIN_URLS[site]})
+                except Exception as exc:
+                    return self._json(500, {"error": f"打开登录页失败: {exc}"})
+            except json.JSONDecodeError:
+                return self._json(400, {"error": "请求体不是合法 JSON"})
+        if path == "/api/shutdown":
+            # 先回响应,再在别的线程里关服务器(否则响应发不出去)
+            self._json(200, {"ok": True, "message": "服务正在退出"})
+            threading.Thread(target=self._shutdown_server, daemon=True).start()
+            return
         self._json(404, {"error": "not found"})
+
+    def _shutdown_server(self) -> None:
+        time.sleep(0.25)
+        srv = getattr(type(self), "httpd", None)
+        if srv is not None:
+            srv.shutdown()
 
     # ---------------- 底层 ---------------- #
     def _health(self) -> dict:
@@ -331,6 +349,8 @@ class Handler(BaseHTTPRequestHandler):
             "chrome": chrome_ok,
             "chrome_detail": detail,
             "version": __version__,
+            "llm_model": self.manager.llm_settings.model,
+            "llm_configured": bool(self.manager.llm_settings.api_key),
             "hint": (
                 "请先运行 bash scripts/open_chrome_debug.sh 并保持该 Chrome 打开"
                 if not chrome_ok
@@ -360,24 +380,48 @@ class Handler(BaseHTTPRequestHandler):
 
 
 # --------------------------------------------------------------------------- #
-def main(argv: list[str] | None = None) -> int:
-    p = argparse.ArgumentParser(prog="flight-agent-web", description=__doc__)
-    p.add_argument("--host", default=DEFAULT_HOST)
-    p.add_argument("--port", type=int, default=DEFAULT_PORT)
-    p.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
-    args = p.parse_args(argv)
-
-    settings = Settings()
-    manager = TaskManager(settings)
+def build_server(
+    host: str = DEFAULT_HOST,
+    port: int = DEFAULT_PORT,
+    settings: Settings | None = None,
+    llm_settings: LLMSettings | None = None,
+) -> ThreadingHTTPServer:
+    """构造(但不启动)HTTP 服务;供命令行入口和打包后的 .app 启动器复用。"""
+    settings = settings or Settings()
+    manager = TaskManager(settings, llm_settings)
 
     class BoundHandler(Handler):
         pass
 
     BoundHandler.manager = manager  # noqa: 类体不闭合外层作用域,改用赋值注入
     BoundHandler.settings = settings
+    httpd = ThreadingHTTPServer((host, port), BoundHandler)
+    BoundHandler.httpd = httpd      # /api/shutdown 需要拿到 server 才能关自己
+    return httpd
+
+
+def main(argv: list[str] | None = None) -> int:
+    p = argparse.ArgumentParser(prog="flight-agent-web", description=__doc__)
+    p.add_argument("--host", default=DEFAULT_HOST)
+    p.add_argument("--port", type=int, default=DEFAULT_PORT)
+    p.add_argument("--no-open", action="store_true", help="不自动打开浏览器")
+    p.add_argument("--cdp-port", type=int, default=9222, help="抓取用的 Chrome 调试端口")
+    p.add_argument("--sites", help="渠道顺序，逗号分隔；默认 ctrip,qunar")
+    p.add_argument("--all-sites", action="store_true", help="抓取全部渠道")
+    p.add_argument("--qunar-pages", type=int, help="去哪儿翻页数(默认 3,每页 20 条)")
+    p.add_argument("--model", help="覆盖 FLIGHT_AGENT_LLM_MODEL")
+    p.add_argument("--llm-base-url", help="覆盖 FLIGHT_AGENT_LLM_BASE_URL")
+    args = p.parse_args(argv)
+
+    defaults = Settings()
+    sites = tuple(x.strip().lower() for x in (args.sites or ",".join(defaults.sites)).split(",") if x.strip())
+    settings = replace(defaults, sites=sites, stop_after_first_success=not args.all_sites,
+                       cdp_port=args.cdp_port,
+                       qunar_max_pages=args.qunar_pages or defaults.qunar_max_pages)
+    llm_settings = with_overrides(LLMSettings(), model=args.model, base_url=args.llm_base_url)
 
     try:
-        httpd = ThreadingHTTPServer((args.host, args.port), BoundHandler)
+        httpd = build_server(args.host, args.port, settings, llm_settings)
     except OSError as exc:
         if exc.errno == 48:  # Address already in use
             print(
