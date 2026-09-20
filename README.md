@@ -1,4 +1,8 @@
 # flight-agent
+<img width="2400" height="1648" alt="12320a76478bb4b6121f680b4cfa2425" src="https://github.com/user-attachments/assets/378fd8cf-64a4-41e5-ba6f-bfcb6d713e4e" />
+
+<img width="2400" height="1648" alt="074d6297ced5dc4a9fc53f89f32f5814" src="https://github.com/user-attachments/assets/cb056dd2-7d0d-4294-ad11-352023ff376d" />
+
 
 一个基于 Python 的本地机票比价软件。它会复用你在独立 Chrome 窗口中的登录状态，查询携程和去哪儿的航班信息，并按照日期、舱位、经停和时间范围筛选、排序。
 
